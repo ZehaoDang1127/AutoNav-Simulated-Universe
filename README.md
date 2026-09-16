@@ -138,6 +138,10 @@ That's it — the launchers find Python via `.venv/bin/python` (Unix) or
 
 ### Running
 
+For a complete Windows PowerShell reference—including one-time setup,
+direct-entry commands, scenario flags, benchmarks, and an all-simulators setup
+script—see [`SIMULATOR_COMMANDS.md`](SIMULATOR_COMMANDS.md).
+
 | Sim           | macOS                                          | Windows                                  | Entry script                           |
 |---------------|------------------------------------------------|------------------------------------------|----------------------------------------|
 | LiDAR         | `LiDAR_Sim/Run_LIDAR_SIM.command`              | `LiDAR_Sim\Run_LIDAR_SIM.bat`            | `launcher.py` → `lidar_sim_gui.py`     |
@@ -152,6 +156,118 @@ That's it — the launchers find Python via `.venv/bin/python` (Unix) or
 Double-click the `.command` (macOS Finder) or `.bat` (Windows Explorer), or
 run it from a terminal. Any extra CLI flags are forwarded to the underlying
 script — e.g. `Run_GPS_SIM_direct.command --real --single --seed 7`.
+
+### Windows PowerShell command reference
+
+The commands below assume PowerShell is open at the repository root. They use
+only clone-relative paths—no user-specific drive or directory is required.
+
+First download the LFS-managed assets and use UTF-8 console output:
+
+```powershell
+git lfs install
+git lfs pull
+$env:PYTHONUTF8 = "1"
+```
+
+Each simulator owns a separate `.venv`. Set one up with the matching block
+below; the guard preserves an existing environment.
+
+#### SPEED Sim
+
+```powershell
+Push-Location .\SPEED_Sim\simulated_world
+if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+    uv venv --python 3.12 .venv
+}
+uv pip install --python ".\.venv\Scripts\python.exe" --link-mode=copy -r ".\requirements.txt"
+.\.venv\Scripts\python.exe .\speed_sim.py
+Pop-Location
+```
+
+#### GPS Sim
+
+```powershell
+Push-Location .\GPS_Sim\simulated_world
+if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+    uv venv --python 3.12 .venv
+}
+uv pip install --python ".\.venv\Scripts\python.exe" --link-mode=copy -r ".\requirements.txt"
+Pop-Location
+
+.\GPS_Sim\Run_GPS_SIM_direct.bat --real --single --seed 7
+```
+
+Other useful GPS runs:
+
+```powershell
+.\GPS_Sim\Run_GPS_SIM.bat
+.\GPS_Sim\Run_GPS_SIM_direct.bat --random --single --seed 42
+.\GPS_Sim\Run_GPS_SIM_direct.bat --crazy --single --seed 42
+.\GPS_Sim\Run_GPS_SIM_direct.bat --real --single --mission three-waypoint
+.\GPS_Sim\Run_GPS_SIM_direct.bat --real --agents 25 --seed 42
+.\GPS_Sim\Run_GPS_SIM_direct.bat --real --single --headless --headless-steps 500
+```
+
+#### LiDAR Sim
+
+```powershell
+Push-Location .\LiDAR_Sim\simulated_world
+if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+    uv venv --python 3.12 .venv
+}
+uv pip install --python ".\.venv\Scripts\python.exe" --link-mode=copy -r ".\requirements.txt"
+Pop-Location
+
+.\LiDAR_Sim\Run_LIDAR_SIM_direct.bat --threshold 20 --rays 2000
+```
+
+The grade threshold may be `15`, `20`, or `30`. Use `--rays 11520` for full
+LiDAR resolution. The lower 2,000-ray setting is a faster first run on Windows.
+
+Run the ramp benchmark with:
+
+```powershell
+Push-Location .\LiDAR_Sim\simulated_world
+.\.venv\Scripts\python.exe .\scripts\test_ramp_crossing.py --threshold 20 --rays 2000 --agents 5 --no-video
+Pop-Location
+```
+
+#### Behavior Tree Sim
+
+```powershell
+Push-Location .\BEHAVIOR_TREE_Sim\simulated_world
+if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+    uv venv --python 3.12 .venv
+}
+uv pip install --python ".\.venv\Scripts\python.exe" --link-mode=copy -r ".\requirements.txt"
+Pop-Location
+
+.\BEHAVIOR_TREE_Sim\Run_BT_SIM_direct.bat --layout track --seed 7
+```
+
+For a generated maze or a non-graphical test:
+
+```powershell
+.\BEHAVIOR_TREE_Sim\Run_BT_SIM_direct.bat --layout maze --maze-cells 7 --obstacles 6 --seed 42
+.\BEHAVIOR_TREE_Sim\Run_BT_SIM_direct.bat --headless --headless-steps 20000
+```
+
+#### AutoNav GUI/HUD Sim
+
+```powershell
+Push-Location .\GUI_Sim\simulated_world
+if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+    uv venv --python 3.12 .venv
+}
+uv pip install --python ".\.venv\Scripts\python.exe" --link-mode=copy -r ".\requirements.txt"
+Pop-Location
+
+.\GUI_Sim\Run_GUI.bat
+```
+
+To convert a playback CSV or rosbag2 recording into an MP4, use
+`.\GUI_Sim\Bake_Bag_Video.bat`; it opens a file picker.
 
 ---
 
