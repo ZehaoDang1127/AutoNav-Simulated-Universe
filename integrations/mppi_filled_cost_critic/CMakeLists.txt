@@ -1,0 +1,35 @@
+cmake_minimum_required(VERSION 3.16)
+project(autonav_filled_cost_critic)
+set(CMAKE_CXX_STANDARD 17)
+find_package(ament_cmake REQUIRED)
+find_package(nav2_mppi_controller REQUIRED)
+find_package(nav2_smac_planner REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(xtensor REQUIRED)
+find_package(xsimd REQUIRED)
+add_library(autonav_filled_cost_critic SHARED src/filled_cost_critic.cpp)
+target_include_directories(autonav_filled_cost_critic PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(autonav_filled_cost_critic
+  nav2_mppi_controller nav2_smac_planner nav2_costmap_2d pluginlib)
+# Humble MPPI exposes xtensor objects across the plugin boundary but does
+# not export its SIMD definitions/architecture options. Match those types
+# and allocation alignment for both this library and its consumers.
+target_compile_definitions(autonav_filled_cost_critic PUBLIC XTENSOR_ENABLE_XSIMD XTENSOR_USE_XSIMD)
+target_link_libraries(autonav_filled_cost_critic xtensor xtensor::use_xsimd)
+include(CheckCXXCompilerFlag)
+foreach(option -mno-avx512f -msse4.2 -mavx2 -mfma)
+  string(MAKE_C_IDENTIFIER "filled_critic_${option}" option_key)
+  check_cxx_compiler_flag("${option}" "${option_key}")
+  if(${option_key})
+    target_compile_options(autonav_filled_cost_critic PUBLIC "${option}")
+  endif()
+endforeach()
+pluginlib_export_plugin_description_file(nav2_mppi_controller critics.xml)
+install(TARGETS autonav_filled_cost_critic EXPORT autonav_filled_cost_critic_targets
+  ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
+install(DIRECTORY include/ DESTINATION include)
+ament_export_targets(autonav_filled_cost_critic_targets HAS_LIBRARY_TARGET)
+ament_export_dependencies(nav2_mppi_controller nav2_smac_planner nav2_costmap_2d pluginlib xtensor xsimd)
+ament_package()

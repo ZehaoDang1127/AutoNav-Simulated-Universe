@@ -1,0 +1,108 @@
+--- a/igvc_competition_sim/launch/igvc_competition.launch.py
++++ b/igvc_competition_sim/launch/igvc_competition.launch.py
+@@ -157,8 +157,8 @@
+     yaw = sp.yaw if sp and sp.yaw is not None else course.start.yaw
+     return [
+         Node(
+-            package="ros_gz_sim",
+-            executable="create",
++            package="igvc_competition_sim",
++            executable="igvc_verified_spawn",
+             name="igvc_spawn_robot",
+             output="screen",
+             arguments=[
+--- a/igvc_competition_sim/setup.py
++++ b/igvc_competition_sim/setup.py
+@@ -46,6 +46,7 @@
+             "igvc_line_health_analyzer = igvc_competition_sim.line_health_analyzer:main",
+             "igvc_mission_runner = igvc_competition_sim.mission_runner:main",
+             "igvc_odom_bridge = igvc_competition_sim.odom_bridge:main",
++            "igvc_verified_spawn = igvc_competition_sim.verified_spawn:main",
+             "igvc_run_analyzer = igvc_competition_sim.run_analyzer:main",
+             "igvc_sensor_harness = igvc_competition_sim.sensor_harness:main",
+         ],
+--- /dev/null
++++ b/igvc_competition_sim/igvc_competition_sim/verified_spawn.py
+@@ -0,0 +1,82 @@
++"""Wait for an advancing world clock, spawn once, and verify model odometry."""
++import argparse
++import subprocess
++import time
++
++import rclpy
++from rclpy.node import Node
++from rclpy.qos import qos_profile_sensor_data
++from nav_msgs.msg import Odometry
++from rosgraph_msgs.msg import Clock
++
++
++class SpawnProbe(Node):
++    def __init__(self, name):
++        super().__init__("verified_robot_spawn")
++        self.clock_s = 0.0
++        self.clock_advances = 0
++        self.model_seen = False
++        self.create_subscription(Clock, "/clock", self.on_clock, qos_profile_sensor_data)
++        self.create_subscription(Odometry, f"/model/{name}/odometry", self.on_model,
++                                 qos_profile_sensor_data)
++
++    def on_clock(self, msg):
++        value = msg.clock.sec + msg.clock.nanosec * 1e-9
++        if value > self.clock_s:
++            self.clock_advances += 1
++        self.clock_s = value
++
++    def on_model(self, msg):
++        self.model_seen = True
++
++    def wait(self, predicate, deadline):
++        while rclpy.ok() and not predicate() and time.monotonic() < deadline:
++            rclpy.spin_once(self, timeout_sec=0.1)
++        return predicate()
++
++
++def main(args=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("-world", required=True)
++    parser.add_argument("-name", required=True)
++    parser.add_argument("-file", required=True)
++    for key in ("x", "y", "z", "Y"):
++        parser.add_argument("-" + key, default="0")
++    parser.add_argument("--timeout-wall-s", type=float, default=120.0)
++    options, ros_args = parser.parse_known_args(args)
++    rclpy.init(args=ros_args)
++    node = SpawnProbe(options.name)
++    try:
++        deadline = time.monotonic() + options.timeout_wall_s
++        node.get_logger().info("Waiting for advancing world clock before robot spawn")
++        if not node.wait(lambda: node.clock_advances >= 2, deadline):
++            node.get_logger().error("World clock did not advance before spawn deadline")
++            return 2
++        command = ["ros2", "run", "ros_gz_sim", "create",
++                   "-world", options.world, "-name", options.name,
++                   "-file", options.file, "-allow_renaming", "false"]
++        for key in ("x", "y", "z", "Y"):
++            command.extend(["-" + key, getattr(options, key)])
++        for attempt in range(1, 4):
++            if node.model_seen:
++                return 0
++            if time.monotonic() >= deadline:
++                break
++            node.get_logger().info(f"Robot spawn attempt {attempt}/3")
++            try:
++                subprocess.run(command, timeout=min(15.0, deadline - time.monotonic()),
++                               check=False)
++            except subprocess.TimeoutExpired:
++                node.get_logger().warn("Spawn utility did not return before its deadline")
++            # The Humble create utility returns success even after a request
++            # timeout. Model odometry, rather than its exit code, verifies spawn.
++            if node.wait(lambda: node.model_seen, min(deadline, time.monotonic() + 15.0)):
++                node.get_logger().info("Robot spawn verified by Gazebo model odometry")
++                return 0
++            node.get_logger().warn("No model odometry; retry with renaming disabled")
++        node.get_logger().error("Robot spawn could not be verified")
++        return 2
++    finally:
++        node.destroy_node()
++        if rclpy.ok():
++            rclpy.shutdown()

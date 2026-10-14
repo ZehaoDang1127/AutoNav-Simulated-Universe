@@ -1,0 +1,39 @@
+diff --git a/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp b/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
+--- a/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
++++ b/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
+@@ -95,6 +95,8 @@
+   // still flow through allow_decrease clearing; UNKNOWN still means no opinion.
+   int min_occupied_value_to_mirror_;
+   // Persist view-gated FREE cells; fill only UNKNOWN cells in the master.
++  // Full-map snapshot imports replace their old projected cells.
++  bool retain_source_history_{true};
+   bool mirror_free_space_{false};
+   // Optional finite planning penalty for still-unobserved master cells.
+   int unknown_space_cost_{-1};
+diff --git a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -52,6 +52,9 @@
+   if (!node) {
+     return;
+   }
++
++  declareParameter("retain_source_history", rclcpp::ParameterValue(true));
++  node->get_parameter(name_ + ".retain_source_history", retain_source_history_);
+ 
+   declareParameter("mirror_free_space", rclcpp::ParameterValue(false));
+   node->get_parameter(name_ + ".mirror_free_space", mirror_free_space_);
+@@ -515,6 +518,13 @@
+     }
+ 
+     if (msg) {
++      // The source already retains its observed hazards. A full snapshot
++      // must replace our previous projection: transformed grid centers
++      // leave rasterization holes where obsolete lethal cells can persist.
++      // Only reset after TF succeeds; other master layers are untouched.
++      if (!retain_source_history_) {
++        std::fill(costmap_, costmap_ + static_cast<size_t>(size_x_) * size_y_, NO_INFORMATION);
++      }
+       // Layer's resolution is the host's resolution (set by matchSize).
+       // If src_res differs we still proceed — each source cell maps to
+       // whatever host cell its center falls into.

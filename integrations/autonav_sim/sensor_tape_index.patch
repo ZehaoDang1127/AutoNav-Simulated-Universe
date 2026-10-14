@@ -1,0 +1,51 @@
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -8,6 +8,7 @@
+ from .course import Course, load_course, local_to_latlon
+ from .lidar_geometry import raycast_cylinders
+ from .robot_profile import load_robot_profile
++from .tape_index import build_tape_index
+ 
+ try:
+     import rclpy
+@@ -129,6 +130,7 @@
+ 
+         course_path = str(self.get_parameter("course_config").value).strip()
+         self.course: Course = load_course(course_path or None)
++        self._tape_index = build_tape_index(self.course.tapes)
+         profile_path = str(self.get_parameter("robot_profile").value).strip()
+         profile = load_robot_profile(profile_path or None)
+         if profile.geometry is None:
+@@ -718,7 +720,7 @@
+         return points
+ 
+     def _point_on_tape(self, x: float, y: float) -> bool:
+-        for tape in self.course.tapes:
++        for tape in self._tape_index.get((math.floor(x), math.floor(y)), ()):
+             if self._point_segment_distance(x, y, tape.start, tape.end) <= (
+                     0.5 * tape.width_m):
+                 return True
+--- /dev/null
++++ b/igvc_competition_sim/igvc_competition_sim/tape_index.py
+@@ -0,0 +1,21 @@
++"""Spatial candidates for exact tape-distance tests during sensor generation."""
++import math
++
++
++def build_tape_index(tapes):
++    """Index width-expanded segment bounds in 1 m cells.
++
++    The original exact point-to-segment test still decides each return;
++    this only avoids visiting distant segments for every LiDAR beam.
++    """
++    index = {}
++    for tape in tapes:
++        half_width = 0.5 * tape.width_m
++        min_x = math.floor(min(tape.start[0], tape.end[0]) - half_width)
++        max_x = math.floor(max(tape.start[0], tape.end[0]) + half_width)
++        min_y = math.floor(min(tape.start[1], tape.end[1]) - half_width)
++        max_y = math.floor(max(tape.start[1], tape.end[1]) + half_width)
++        for ix in range(min_x, max_x + 1):
++            for iy in range(min_y, max_y + 1):
++                index.setdefault((ix, iy), []).append(tape)
++    return {key: tuple(values) for key, values in index.items()}

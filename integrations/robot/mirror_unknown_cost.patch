@@ -1,0 +1,49 @@
+--- a/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
++++ b/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
+@@ -96,6 +96,8 @@
+   int min_occupied_value_to_mirror_;
+   // Persist view-gated FREE cells; fill only UNKNOWN cells in the master.
+   bool mirror_free_space_{false};
++  // Optional finite planning penalty for still-unobserved master cells.
++  int unknown_space_cost_{-1};
+ 
+   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr sub_;
+   std::vector<rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr> exclude_subs_;
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -3,6 +3,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstring>
++#include <stdexcept>
+ #include <vector>
+ 
+ #include "geometry_msgs/msg/transform_stamped.hpp"
+@@ -54,6 +55,12 @@
+ 
+   declareParameter("mirror_free_space", rclcpp::ParameterValue(false));
+   node->get_parameter(name_ + ".mirror_free_space", mirror_free_space_);
++
++  declareParameter("unknown_space_cost", rclcpp::ParameterValue(-1));
++  node->get_parameter(name_ + ".unknown_space_cost", unknown_space_cost_);
++  if (unknown_space_cost_ < -1 || unknown_space_cost_ > 252) {
++    throw std::invalid_argument("unknown_space_cost must be -1 or between 0 and 252");
++  }
+ 
+   declareParameter("enabled", rclcpp::ParameterValue(true));
+   declareParameter("source_topic", rclcpp::ParameterValue("/local_costmap/costmap"));
+@@ -625,6 +632,14 @@
+           master_array[free_midx] = FREE_SPACE;
+         }
+       }
++      if (unknown_space_cost_ >= 0) {
++        const unsigned int unknown_midx = j * master_size_x + i;
++        // Humble Smac skips UNKNOWN in its obstacle heuristic. Give
++        // exploration a finite penalty, without calling it FREE.
++        if (master_array[unknown_midx] == NO_INFORMATION) {
++          master_array[unknown_midx] = static_cast<unsigned char>(unknown_space_cost_);
++        }
++      }
+       if (layer_cost == NO_INFORMATION || layer_cost == FREE_SPACE) {
+         continue;
+       }

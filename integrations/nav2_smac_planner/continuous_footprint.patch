@@ -1,0 +1,590 @@
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/collision_checker.hpp b/nav2_smac_planner/include/nav2_smac_planner/collision_checker.hpp
+index 5933a6d..14d4cb3 100644
+--- a/nav2_smac_planner/include/nav2_smac_planner/collision_checker.hpp
++++ b/nav2_smac_planner/include/nav2_smac_planner/collision_checker.hpp
+@@ -94,6 +94,10 @@ public:
+    */
+   float getCost();
+ 
++  // Rebuild under the planner's costmap lock before each search. Standalone
++  // collision checks remain uncached unless this is explicitly called.
++  void cacheCollisionBounds();
++
+   /**
+    * @brief Get the angles of the precomputed footprint orientations
+    * @return the ordered vector of angles corresponding to footprints
+@@ -120,6 +124,10 @@ protected:
+   bool footprint_is_radius_;
+   std::vector<float> angles_;
+   double possible_inscribed_cost_{-1};
++  size_t collision_stride_{0};
++  unsigned int collision_height_{0};
++  std::vector<uint32_t> collision_bounds_;
++  std::vector<std::vector<unsigned int>> collision_columns_;
+   rclcpp::Logger logger_{rclcpp::get_logger("SmacPlannerCollisionChecker")};
+   rclcpp::Clock::SharedPtr clock_;
+ };
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp b/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
+index f5207cd..cd5cf95 100644
+--- a/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
++++ b/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
+@@ -99,12 +99,15 @@ protected:
+   rclcpp::Clock::SharedPtr _clock;
+   rclcpp::Logger _logger{rclcpp::get_logger("SmacPlannerLattice")};
+   nav2_costmap_2d::Costmap2D * _costmap;
++  // Owned immutable search input; the live costmap keeps accepting sensors.
++  std::unique_ptr<nav2_costmap_2d::Costmap2D> _planning_costmap;
+   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> _costmap_ros;
+   MotionModel _motion_model;
+   LatticeMetadata _metadata;
+   std::string _global_frame, _name;
+   SearchInfo _search_info;
+   bool _allow_unknown;
++  bool _allow_goal_heading_change{false};
+   int _max_iterations;
+   int _max_on_approach_iterations;
+   float _tolerance;
+diff --git a/nav2_smac_planner/src/collision_checker.cpp b/nav2_smac_planner/src/collision_checker.cpp
+index 59e7f67..2ea839a 100644
+--- a/nav2_smac_planner/src/collision_checker.cpp
++++ b/nav2_smac_planner/src/collision_checker.cpp
+@@ -100,15 +100,25 @@ bool GridCollisionChecker::inCollision(
+     return true;
+   }
+ 
++  // The grid coordinate represents a cell center plus a continuous offset.
++  // Its physical world position can lie in the next cell after half a cell.
++  const auto center_x = static_cast<unsigned int>(std::floor(x + 0.5f));
++  const auto center_y = static_cast<unsigned int>(std::floor(y + 0.5f));
++  if (center_x >= costmap_->getSizeInCellsX() || center_y >= costmap_->getSizeInCellsY()) {
++    return true;
++  }
+   // Assumes setFootprint already set
+   double wx, wy;
+-  costmap_->mapToWorld(static_cast<double>(x), static_cast<double>(y), wx, wy);
++  // Motion primitives carry fractional grid coordinates. Costmap2D's
++  // mapToWorld accepts unsigned cells and silently truncates those positions.
++  wx = costmap_->getOriginX() + (static_cast<double>(x) + 0.5) * costmap_->getResolution();
++  wy = costmap_->getOriginY() + (static_cast<double>(y) + 0.5) * costmap_->getResolution();
+ 
+   if (!footprint_is_radius_) {
+     // if footprint, then we check for the footprint's points, but first see
+     // if the robot is even potentially in an inscribed collision
+     footprint_cost_ = costmap_->getCost(
+-      static_cast<unsigned int>(x), static_cast<unsigned int>(y));
++      center_x, center_y);
+ 
+     if (footprint_cost_ < possible_inscribed_cost_) {
+       if (possible_inscribed_cost_ > 0) {
+@@ -134,31 +144,103 @@ bool GridCollisionChecker::inCollision(
+       return true;
+     }
+ 
+-    // if possible inscribed, need to check actual footprint pose.
+-    // Use precomputed oriented footprints are done on initialization,
+-    // offset by translation value to collision check
+-    geometry_msgs::msg::Point new_pt;
+-    const nav2_costmap_2d::Footprint & oriented_footprint = oriented_footprints_[angle_bin];
++    // Keep the actual primitive yaw instead of flooring to a cached bin.
++    const double yaw = angle_bin * 2.0 * M_PI / angles_.size();
++    const double c = std::cos(yaw), s = std::sin(yaw);
+     nav2_costmap_2d::Footprint current_footprint;
+-    current_footprint.reserve(oriented_footprint.size());
+-    for (unsigned int i = 0; i < oriented_footprint.size(); ++i) {
+-      new_pt.x = wx + oriented_footprint[i].x;
+-      new_pt.y = wy + oriented_footprint[i].y;
+-      current_footprint.push_back(new_pt);
++    double min_x = wx, max_x = wx, min_y = wy, max_y = wy;
++    for (const auto & point : unoriented_footprint_) {
++      geometry_msgs::msg::Point transformed;
++      transformed.x = wx + point.x * c - point.y * s;
++      transformed.y = wy + point.x * s + point.y * c;
++      current_footprint.push_back(transformed);
++      min_x = std::min(min_x, transformed.x);
++      max_x = std::max(max_x, transformed.x);
++      min_y = std::min(min_y, transformed.y);
++      max_y = std::max(max_y, transformed.y);
++    }
++    const double resolution = costmap_->getResolution();
++    const int mx0 = std::floor((min_x - costmap_->getOriginX()) / resolution);
++    const int mx1 = std::floor((max_x - costmap_->getOriginX()) / resolution);
++    const int my0 = std::floor((min_y - costmap_->getOriginY()) / resolution);
++    const int my1 = std::floor((max_y - costmap_->getOriginY()) / resolution);
++    if (mx0 < 0 || my0 < 0 || mx1 >= static_cast<int>(costmap_->getSizeInCellsX()) ||
++      my1 >= static_cast<int>(costmap_->getSizeInCellsY()))
++    {
++      return true;
+     }
+ 
+-    footprint_cost_ = footprintCost(current_footprint);
+-
+-    if (footprint_cost_ == UNKNOWN && traverse_unknown) {
+-      return false;
++    // Keep center inflation as the traversal cost. The padded polygon
++    // determines hard collision only; scoring its already-inflated edge
++    // would add the body radius twice and favor unknown space over lanes.
++    if (collision_stride_ == costmap_->getSizeInCellsX() + 1 &&
++      collision_height_ == costmap_->getSizeInCellsY())
++    {
++      const auto count = collision_bounds_[(my1+1)*collision_stride_+mx1+1] +
++        collision_bounds_[my0*collision_stride_+mx0] -
++        collision_bounds_[my0*collision_stride_+mx1+1] -
++        collision_bounds_[(my1+1)*collision_stride_+mx0];
++      if (count == 0) {
++        return false;
++      }
++    }
++    // Boundary rasterization can miss an obstacle inside the body or beside
++    // a quantized edge. Test lethal cell centers throughout the filled polygon,
++    // matching PathFootprintSafe. Inflation remains a center-only hard check.
++    const auto cell_collides = [&](int mx, int my) {
++        const auto cost = costmap_->getCost(mx, my);
++        if (cost < OCCUPIED || (cost == UNKNOWN && traverse_unknown)) {
++          return false;
++        }
++        double px, py;
++        costmap_->mapToWorld(mx, my, px, py);
++        bool inside = false;
++        for (size_t i = 0, j = current_footprint.size() - 1;
++          i < current_footprint.size(); j = i++)
++        {
++          const auto & a = current_footprint[i];
++          const auto & b = current_footprint[j];
++          const double cross = (px - a.x) * (b.y - a.y) - (py - a.y) * (b.x - a.x);
++          const double dot = (px - a.x) * (b.x - a.x) + (py - a.y) * (b.y - a.y);
++          const double length2 = (b.x-a.x)*(b.x-a.x) + (b.y-a.y)*(b.y-a.y);
++          if (std::abs(cross) <= 1e-9 && dot >= -1e-9 && dot <= length2 + 1e-9) {
++            inside = true;
++            break;
++          }
++          if ((a.y > py) != (b.y > py) &&
++            px < (b.x-a.x)*(py-a.y)/(b.y-a.y) + a.x)
++          {
++            inside = !inside;
++          }
++        }
++        if (inside) {
++          footprint_cost_ = cost;
++        }
++        return inside;
++      };
++    for (int my = my0; my <= my1; ++my) {
++      if (collision_columns_.size() == costmap_->getSizeInCellsY()) {
++        // The owned search map is immutable. Its sorted occupied columns
++        // avoid rereading every free cell in every padded bounding box.
++        const auto & columns = collision_columns_[my];
++        auto column = std::lower_bound(columns.begin(), columns.end(), mx0);
++        for (; column != columns.end() && *column <= static_cast<unsigned int>(mx1); ++column) {
++          if (cell_collides(*column, my)) {return true;}
++        }
++      } else {
++        for (int mx = mx0; mx <= mx1; ++mx) {
++          if (cell_collides(mx, my)) {return true;}
++        }
++      }
+     }
+ 
+-    // if occupied or unknown and not to traverse unknown space
+-    return footprint_cost_ >= OCCUPIED;
++    // Occupied and disallowed unknown cells were rejected above. Retain
++    // the center cost for valid nodes, matching current Nav2 Smac scoring.
++    return false;
+   } else {
+     // if radius, then we can check the center of the cost assuming inflation is used
+     footprint_cost_ = costmap_->getCost(
+-      static_cast<unsigned int>(x), static_cast<unsigned int>(y));
++      center_x, center_y);
+ 
+     if (footprint_cost_ == UNKNOWN && traverse_unknown) {
+       return false;
+@@ -182,6 +264,25 @@ bool GridCollisionChecker::inCollision(
+   return footprint_cost_ >= INSCRIBED;
+ }
+ 
++void GridCollisionChecker::cacheCollisionBounds()
++{
++  collision_stride_ = costmap_->getSizeInCellsX() + 1;
++  collision_height_ = costmap_->getSizeInCellsY();
++  collision_bounds_.assign(collision_stride_ * (collision_height_ + 1), 0);
++  collision_columns_.assign(collision_height_, {});
++  const auto * costs = costmap_->getCharMap();
++  for (size_t y = 1; y <= collision_height_; ++y) {
++    uint32_t row = 0;
++    for (size_t x = 1; x < collision_stride_; ++x) {
++      const bool occupied = costs[(y-1)*(collision_stride_-1)+x-1] >= OCCUPIED;
++      row += occupied;
++      if (occupied) {collision_columns_[y-1].push_back(x-1);}
++      collision_bounds_[y*collision_stride_+x] =
++        row + collision_bounds_[(y-1)*collision_stride_+x];
++    }
++  }
++}
++
+ float GridCollisionChecker::getCost()
+ {
+   // Assumes inCollision called prior
+@@ -190,7 +291,7 @@ float GridCollisionChecker::getCost()
+ 
+ bool GridCollisionChecker::outsideRange(const unsigned int & max, const float & value)
+ {
+-  return value < 0.0f || value > max;
++  return value < 0.0f || value >= max;
+ }
+ 
+ }  // namespace nav2_smac_planner
+diff --git a/nav2_smac_planner/src/node_lattice.cpp b/nav2_smac_planner/src/node_lattice.cpp
+index ff123f8..e445325 100644
+--- a/nav2_smac_planner/src/node_lattice.cpp
++++ b/nav2_smac_planner/src/node_lattice.cpp
+@@ -224,9 +224,6 @@ bool NodeLattice::isNodeValid(
+   // If valid motion primitives are set, check intermediary poses > 1 cell apart
+   if (motion_primitive) {
+     const float & grid_resolution = motion_table.lattice_metadata.grid_resolution;
+-    const float & resolution_diag_sq = 2.0 * grid_resolution * grid_resolution;
+-    MotionPose last_pose(1e9, 1e9, 1e9), pose_dist(0.0, 0.0, 0.0);
+-
+     // Back out the initial node starting point to move motion primitive relative to
+     MotionPose initial_pose, prim_pose;
+     initial_pose._x = this->pose.x - (motion_primitive->poses.back()._x / grid_resolution);
+@@ -235,10 +232,7 @@ bool NodeLattice::isNodeValid(
+ 
+     for (auto it = motion_primitive->poses.begin(); it != motion_primitive->poses.end(); ++it) {
+       // poses are in metric coordinates from (0, 0), not grid space yet
+-      pose_dist = *it - last_pose;
+-      // Avoid square roots by (hypot(x, y) > res) == (x*x+y*y > diag*diag)
+-      if (pose_dist._x * pose_dist._x + pose_dist._y * pose_dist._y > resolution_diag_sq) {
+-        last_pose = *it;
++      {
+         // Convert primitive pose into grid space if it should be checked
+         prim_pose._x = initial_pose._x + (it->_x / grid_resolution);
+         prim_pose._y = initial_pose._y + (it->_y / grid_resolution);
+diff --git a/nav2_smac_planner/src/smac_planner_lattice.cpp b/nav2_smac_planner/src/smac_planner_lattice.cpp
+index 31090e1..22ec80e 100644
+--- a/nav2_smac_planner/src/smac_planner_lattice.cpp
++++ b/nav2_smac_planner/src/smac_planner_lattice.cpp
+@@ -20,6 +20,8 @@
+ 
+ #include "Eigen/Core"
+ #include "nav2_smac_planner/smac_planner_lattice.hpp"
++#include "nav2_smac_planner/lattice_start.hpp"
++#include "nav2_smac_planner/lattice_goal.hpp"
+ 
+ // #define BENCHMARK_TESTING
+ 
+@@ -71,6 +73,9 @@ void SmacPlannerLattice::configure(
+   nav2_util::declare_parameter_if_not_declared(
+     node, name + ".allow_unknown", rclcpp::ParameterValue(true));
+   node->get_parameter(name + ".allow_unknown", _allow_unknown);
++  nav2_util::declare_parameter_if_not_declared(
++    node, name + ".allow_goal_heading_change", rclcpp::ParameterValue(false));
++  node->get_parameter(name + ".allow_goal_heading_change", _allow_goal_heading_change);
+   nav2_util::declare_parameter_if_not_declared(
+     node, name + ".max_iterations", rclcpp::ParameterValue(1000000));
+   node->get_parameter(name + ".max_iterations", _max_iterations);
+@@ -242,25 +247,64 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
+ 
+   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(_costmap->getMutex()));
+ 
+-  // Set collision checker and costmap information
+-  _collision_checker.setFootprint(
+-    _costmap_ros->getRobotFootprint(),
+-    _costmap_ros->getUseRadius(),
+-    findCircumscribedCost(_costmap_ros));
++  // Copy a consistent planning input while locked, then allow sensor updates
++  // throughout search. Holding the live map lock for several seconds starves
++  // the active-route guards of fresh observations. The controller guards still
++  // validate the result against the latest published local/global maps.
++  if (!_planning_costmap) {
++    _planning_costmap = std::make_unique<nav2_costmap_2d::Costmap2D>();
++  }
++  *_planning_costmap = *_costmap;
++  const auto footprint = _costmap_ros->getRobotFootprint();
++  const bool use_radius = _costmap_ros->getUseRadius();
++  const double circumscribed_cost = findCircumscribedCost(_costmap_ros);
++  lock.unlock();
++  auto * _costmap = _planning_costmap.get();
++  _collision_checker.setCostmap(_costmap);
++  _collision_checker.setFootprint(footprint, use_radius, circumscribed_cost);
++  _collision_checker.cacheCollisionBounds();
+   _a_star->setCollisionChecker(&_collision_checker);
+ 
+   // Set starting point, in A* bin search coordinates
+   unsigned int mx, my;
+   _costmap->worldToMap(start.pose.position.x, start.pose.position.y, mx, my);
+-  _a_star->setStart(
+-    mx, my,
+-    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(start.pose.orientation)));
++  const float start_x = (start.pose.position.x - _costmap->getOriginX()) /
++    _costmap->getResolution() - 0.5;
++  const float start_y = (start.pose.position.y - _costmap->getOriginY()) /
++    _costmap->getResolution() - 0.5;
++  unsigned int start_heading = 0;
++  if (!selectCollisionFreeLatticeStart(
++      _collision_checker, start_x, start_y, tf2::getYaw(start.pose.orientation),
++      _metadata.heading_angles, _allow_unknown, start_heading))
++  {
++    RCLCPP_WARN(_logger, "No collision-free connection from measured pose to lattice heading");
++    nav_msgs::msg::Path empty;
++    empty.header.stamp = _clock->now();
++    empty.header.frame_id = _global_frame;
++    return empty;
++  }
++  _a_star->setStart(mx, my, start_heading);
++  _a_star->getStart()->setPose(NodeLattice::Coordinates(start_x, start_y, start_heading));
+ 
+   // Set goal point, in A* bin search coordinates
+   _costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, mx, my);
+-  _a_star->setGoal(
+-    mx, my,
+-    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(goal.pose.orientation)));
++  unsigned int goal_heading =
++    NodeLattice::motion_table.getClosestAngularBin(tf2::getYaw(goal.pose.orientation));
++  float search_tolerance = _tolerance / _costmap->getResolution();
++  if (_allow_goal_heading_change) {
++    const unsigned int requested_mx = mx, requested_my = my;
++    // Position-only GPS goals may use a clear arrival cell within the existing
++    // tolerance when all orientations at the requested cell are occupied.
++    selectCollisionFreeLatticeGoalWithinTolerance(
++      _collision_checker, *_costmap, goal.pose.position.x, goal.pose.position.y,
++      tf2::getYaw(goal.pose.orientation), _metadata.heading_angles,
++      _allow_unknown, _tolerance, mx, my, goal_heading);
++    if (mx != requested_mx || my != requested_my) {
++      // Do not apply the positional tolerance a second time around this cell.
++      search_tolerance = 0.0f;
++    }
++  }
++  _a_star->setGoal(mx, my, goal_heading);
+ 
+   // Setup message
+   nav_msgs::msg::Path plan;
+@@ -280,7 +324,7 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
+   std::string error;
+   try {
+     if (!_a_star->createPath(
+-        path, num_iterations, _tolerance / static_cast<float>(_costmap->getResolution())))
++        path, num_iterations, search_tolerance))
+     {
+       if (num_iterations < _a_star->getMaxIterations()) {
+         error = std::string("no valid path found");
+@@ -321,6 +365,12 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
+     plan.poses.push_back(pose);
+   }
+ 
++  // Include the measured pose and validated initial turn in the route,
++  // so downstream whole-path validation and control see the same connection.
++  auto measured_start = start;
++  measured_start.header = plan.header;
++  plan.poses.insert(plan.poses.begin(), measured_start);
++
+   // Publish raw path for debug
+   if (_raw_plan_publisher->get_subscription_count() > 0) {
+     _raw_plan_publisher->publish(plan);
+@@ -338,7 +388,43 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlan(
+ 
+   // Smooth plan
+   if (_smoother && num_iterations > 1) {
++    const auto unsmoothed_plan = plan;
+     _smoother->smooth(plan, _costmap, time_remaining);
++    // The smoother checks center costs. Preserve the searched route if its
++    // output lets any part of the filled body intersect an obstacle.
++    bool safe = true;
++    const double resolution = _costmap->getResolution();
++    const double bins = _collision_checker.getPrecomputedAngles().size();
++    for (size_t i = 1; i < plan.poses.size() && safe; ++i) {
++      const auto & a = plan.poses[i-1].pose;
++      const auto & b = plan.poses[i].pose;
++      const double start_yaw = tf2::getYaw(a.orientation);
++      const double delta = tf2::getYaw(b.orientation) - start_yaw;
++      const double yaw_delta = std::atan2(std::sin(delta), std::cos(delta));
++      const int steps = std::max(1, std::max(
++        static_cast<int>(std::ceil(std::hypot(b.position.x-a.position.x,
++        b.position.y-a.position.y) / 0.05)),
++        static_cast<int>(std::ceil(std::abs(yaw_delta) / 0.10))));
++      for (int step = 0; step <= steps; ++step) {
++        const double fraction = static_cast<double>(step) / steps;
++        const double x = a.position.x + fraction*(b.position.x-a.position.x);
++        const double y = a.position.y + fraction*(b.position.y-a.position.y);
++        double yaw = start_yaw + fraction*yaw_delta;
++        if (yaw < 0) {yaw += 2*M_PI;}
++        if (_collision_checker.inCollision(
++            (x-_costmap->getOriginX())/resolution-.5,
++            (y-_costmap->getOriginY())/resolution-.5,
++            yaw*bins/(2*M_PI), _allow_unknown))
++        {
++          safe = false;
++          break;
++        }
++      }
++    }
++    if (!safe) {
++      plan = unsmoothed_plan;
++      RCLCPP_WARN(_logger, "Smoothing failed filled-footprint validation; retaining searched route");
++    }
+   }
+ 
+ #ifdef BENCHMARK_TESTING
+@@ -400,6 +486,8 @@ SmacPlannerLattice::dynamicParametersCallback(std::vector<rclcpp::Parameter> par
+       if (name == _name + ".allow_unknown") {
+         reinit_a_star = true;
+         _allow_unknown = parameter.as_bool();
++      } else if (name == _name + ".allow_goal_heading_change") {
++        _allow_goal_heading_change = parameter.as_bool();
+       } else if (name == _name + ".cache_obstacle_heuristic") {
+         reinit_a_star = true;
+         _search_info.cache_obstacle_heuristic = parameter.as_bool();
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/lattice_start.hpp b/nav2_smac_planner/include/nav2_smac_planner/lattice_start.hpp
+new file mode 100644
+index 0000000..a8f8626
+--- /dev/null
++++ b/nav2_smac_planner/include/nav2_smac_planner/lattice_start.hpp
+@@ -0,0 +1,50 @@
++#ifndef NAV2_SMAC_PLANNER__LATTICE_START_HPP_
++#define NAV2_SMAC_PLANNER__LATTICE_START_HPP_
++
++#include <algorithm>
++#include <cmath>
++#include <limits>
++#include <vector>
++#include "nav2_smac_planner/collision_checker.hpp"
++
++namespace nav2_smac_planner
++{
++
++// Connect the measured pose to a discrete lattice heading at the same
++// continuous position. Snapping the center or blindly choosing the nearest
++// heading can put an otherwise clear padded body into an obstacle.
++inline bool selectCollisionFreeLatticeStart(
++  GridCollisionChecker & checker, float x, float y, double yaw,
++  const std::vector<float> & headings, bool traverse_unknown, unsigned int & heading)
++{
++  const double bins = checker.getPrecomputedAngles().size();
++  const auto collides = [&](double angle) {
++      angle = std::fmod(angle, 2.0 * M_PI);
++      if (angle < 0.0) {angle += 2.0 * M_PI;}
++      return checker.inCollision(x, y, angle * bins / (2.0 * M_PI), traverse_unknown);
++    };
++  if (collides(yaw)) {
++    return false;
++  }
++  double best_distance = std::numeric_limits<double>::infinity();
++  for (unsigned int candidate = 0; candidate < headings.size(); ++candidate) {
++    const double delta = std::atan2(std::sin(headings[candidate] - yaw),
++      std::cos(headings[candidate] - yaw));
++    if (std::abs(delta) >= best_distance) {
++      continue;
++    }
++    const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(delta) / 0.05)));
++    bool safe = true;
++    for (int step = 1; step <= steps && safe; ++step) {
++      safe = !collides(yaw + delta * static_cast<double>(step) / steps);
++    }
++    if (safe) {
++      heading = candidate;
++      best_distance = std::abs(delta);
++    }
++  }
++  return std::isfinite(best_distance);
++}
++
++}  // namespace nav2_smac_planner
++#endif  // NAV2_SMAC_PLANNER__LATTICE_START_HPP_
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/lattice_goal.hpp b/nav2_smac_planner/include/nav2_smac_planner/lattice_goal.hpp
+new file mode 100644
+index 0000000..a27c561
+--- /dev/null
++++ b/nav2_smac_planner/include/nav2_smac_planner/lattice_goal.hpp
+@@ -0,0 +1,94 @@
++#ifndef NAV2_SMAC_PLANNER__LATTICE_GOAL_HPP_
++#define NAV2_SMAC_PLANNER__LATTICE_GOAL_HPP_
++
++#include <algorithm>
++#include <cmath>
++#include <limits>
++#include <vector>
++#include "nav2_smac_planner/collision_checker.hpp"
++
++namespace nav2_smac_planner
++{
++
++// For a position goal with unconstrained yaw, prefer the requested lattice
++// heading when clear, otherwise choose the nearest clear arrival heading.
++// The search reaches this heading directly; no rotation to the blocked yaw
++// is required. The requested goal position is never moved.
++inline bool selectCollisionFreeLatticeGoal(
++  GridCollisionChecker & checker, float x, float y, double requested_yaw,
++  const std::vector<float> & headings, bool traverse_unknown, unsigned int & heading)
++{
++  const double bins = checker.getPrecomputedAngles().size();
++  double best_distance = std::numeric_limits<double>::infinity();
++  for (unsigned int candidate = 0; candidate < headings.size(); ++candidate) {
++    const double delta = std::atan2(std::sin(headings[candidate] - requested_yaw),
++      std::cos(headings[candidate] - requested_yaw));
++    if (std::abs(delta) >= best_distance) {continue;}
++    double angle = std::fmod(headings[candidate], 2.0*M_PI);
++    if (angle < 0.0) {angle += 2.0*M_PI;}
++    if (!checker.inCollision(x, y, angle*bins/(2.0*M_PI), traverse_unknown)) {
++      heading = candidate;
++      best_distance = std::abs(delta);
++    }
++  }
++  return std::isfinite(best_distance);
++}
++
++// When every heading at the requested cell is occupied, explicitly select
++// the nearest clear cell inside the existing world-position tolerance. This
++// keeps an occupied exact goal from exhausting the search before its tolerant
++// fallback reaches a nearby clear arrival. A moved cell must be searched with
++// zero additional tolerance, so tolerances cannot compound.
++inline bool selectCollisionFreeLatticeGoalWithinTolerance(
++  GridCollisionChecker & checker, const nav2_costmap_2d::Costmap2D & map,
++  double requested_x, double requested_y, double requested_yaw,
++  const std::vector<float> & headings, bool traverse_unknown, double tolerance,
++  unsigned int & x, unsigned int & y, unsigned int & heading)
++{
++  if (selectCollisionFreeLatticeGoal(
++      checker, x, y, requested_yaw, headings, traverse_unknown, heading))
++  {
++    return true;
++  }
++  if (!std::isfinite(tolerance) || tolerance <= 0.0) {return false;}
++  struct Candidate {double distance; unsigned int x; unsigned int y;};
++  std::vector<Candidate> candidates;
++  const double resolution = map.getResolution();
++  const double grid_x = (requested_x-map.getOriginX())/resolution-.5;
++  const double grid_y = (requested_y-map.getOriginY())/resolution-.5;
++  const double radius = tolerance/resolution;
++  const int min_x = std::max(0, static_cast<int>(std::ceil(grid_x-radius)));
++  const int max_x = std::min(static_cast<int>(map.getSizeInCellsX())-1,
++    static_cast<int>(std::floor(grid_x+radius)));
++  const int min_y = std::max(0, static_cast<int>(std::ceil(grid_y-radius)));
++  const int max_y = std::min(static_cast<int>(map.getSizeInCellsY())-1,
++    static_cast<int>(std::floor(grid_y+radius)));
++  for (int cy = min_y; cy <= max_y; ++cy) {
++    for (int cx = min_x; cx <= max_x; ++cx) {
++      const double distance = std::hypot(cx-grid_x, cy-grid_y)*resolution;
++      if (distance <= tolerance) {
++        candidates.push_back({distance, static_cast<unsigned int>(cx),
++          static_cast<unsigned int>(cy)});
++      }
++    }
++  }
++  std::sort(candidates.begin(), candidates.end(), [](const Candidate & a, const Candidate & b) {
++    return a.distance < b.distance;
++  });
++  for (const auto & candidate : candidates) {
++    unsigned int candidate_heading = heading;
++    if (selectCollisionFreeLatticeGoal(
++        checker, candidate.x, candidate.y, requested_yaw, headings,
++        traverse_unknown, candidate_heading))
++    {
++      x = candidate.x;
++      y = candidate.y;
++      heading = candidate_heading;
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace nav2_smac_planner
++#endif  // NAV2_SMAC_PLANNER__LATTICE_GOAL_HPP_

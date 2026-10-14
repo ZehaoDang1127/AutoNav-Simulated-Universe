@@ -1,0 +1,225 @@
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -13,7 +13,7 @@
+ 
+ try:
+     import rclpy
+-    from rclpy.callback_groups import ReentrantCallbackGroup
++    from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
+     from rclpy.executors import ExternalShutdownException
+     from rclpy.executors import MultiThreadedExecutor
+     from rclpy.node import Node
+@@ -253,7 +253,7 @@
+         self.right_wheel_position = 0.0
+         self.ground_truth_line_points = self._build_ground_truth_line_points()
+         self.fast_callback_group = ReentrantCallbackGroup()
+-        self.sensor_callback_group = ReentrantCallbackGroup()
++        self.sensor_callback_group = MutuallyExclusiveCallbackGroup()
+ 
+         self.create_timer(
+             1.0 / max(1.0, float(self.get_parameter("odom_rate_hz").value)),
+@@ -344,10 +344,10 @@
+             if tf.child_frame_id == self.robot_model_name:
+                 t = tf.transform.translation
+                 q = tf.transform.rotation
+-                self.base_x = float(t.x)
+-                self.base_y = float(t.y)
+-                self.heading = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
+                 with self._imu_lock:
++                    self.base_x = float(t.x)
++                    self.base_y = float(t.y)
++                    self.heading = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
+                     self._imu_physics_yaw = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
+                     self._imu_physics_stamp = tf.header.stamp
+                     if _stamp_to_float(self._imu_physics_stamp) <= 0.0:
+@@ -369,10 +369,11 @@
+         self.last_gazebo_odom_s = _stamp_to_float(stamp)
+         if not self._true_pose_live():
+             # No true-pose feed: fall back to the dead-reckoned wheel-odom pose.
+-            self.base_x = float(msg.pose.pose.position.x)
+-            self.base_y = float(msg.pose.pose.position.y)
+-            q = msg.pose.pose.orientation
+-            self.heading = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
++            with self._imu_lock:
++                self.base_x = float(msg.pose.pose.position.x)
++                self.base_y = float(msg.pose.pose.position.y)
++                q = msg.pose.pose.orientation
++                self.heading = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
+         self.applied_v = float(msg.twist.twist.linear.x)
+         self.applied_w = float(msg.twist.twist.angular.z)
+         if self.publish_odom_tf:
+@@ -568,16 +569,25 @@
+         msg.twist.twist.angular.z = self.applied_w
+         self.ground_truth_odom_pub.publish(msg)
+ 
++    def _sensor_pose_sample(self):
++        # Sensor generation runs concurrently with the physical pose feed.
++        # Capture once, then release the lock before expensive ray casting.
++        with self._imu_lock:
++            pose = (self.base_x, self.base_y, self.heading)
++            stamp = (self._imu_physics_stamp if self._true_pose_live()
++                     else self.get_clock().now().to_msg())
++            return pose, stamp
++
+     def _publish_gps(self) -> None:
+-        stamp = self.get_clock().now().to_msg()
+-        c = math.cos(self.heading)
+-        s = math.sin(self.heading)
++        (base_x, base_y, heading), stamp = self._sensor_pose_sample()
++        c = math.cos(heading)
++        s = math.sin(heading)
+         gps_x = (
+-            self.base_x + self.robot.gps_x_from_base_link_m * c
++            base_x + self.robot.gps_x_from_base_link_m * c
+             - self.robot.gps_y_from_base_link_m * s
+         )
+         gps_y = (
+-            self.base_y + self.robot.gps_x_from_base_link_m * s
++            base_y + self.robot.gps_x_from_base_link_m * s
+             + self.robot.gps_y_from_base_link_m * c
+         )
+         if self.gps_noise_std_m > 0.0:
+@@ -606,23 +616,26 @@
+         msg.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+         self.gps_pub.publish(msg)
+ 
+-    def _lidar_origin_world(self) -> tuple[float, float]:
+-        c = math.cos(self.heading)
+-        s = math.sin(self.heading)
++    def _lidar_origin_world(self, pose=None) -> tuple[float, float]:
++        base_x, base_y, heading = pose or (self.base_x, self.base_y, self.heading)
++        c = math.cos(heading)
++        s = math.sin(heading)
+         return (
+-            self.base_x + self.robot.lidar_x_from_base_link_m * c,
+-            self.base_y + self.robot.lidar_x_from_base_link_m * s,
++            base_x + self.robot.lidar_x_from_base_link_m * c,
++            base_y + self.robot.lidar_x_from_base_link_m * s,
+         )
+ 
+     def _world_to_base(self,
+                        x: float,
+                        y: float,
+                        z_above_ground: float = 0.0,
++                       pose=None,
+                        ) -> tuple[float, float, float]:
+-        dx = x - self.base_x
+-        dy = y - self.base_y
+-        c = math.cos(self.heading)
+-        s = math.sin(self.heading)
++        base_x, base_y, heading = pose or (self.base_x, self.base_y, self.heading)
++        dx = x - base_x
++        dy = y - base_y
++        c = math.cos(heading)
++        s = math.sin(heading)
+         return (
+             c * dx + s * dy,
+             -s * dx + c * dy,
+@@ -666,23 +679,25 @@
+         intensity: float,
+         reflector: bool,
+         layer: int,
++        pose=None,
+     ) -> None:
+         lidar = self._base_to_lidar(
+-            self._world_to_base(world_x, world_y, z_above_ground))
++            self._world_to_base(world_x, world_y, z_above_ground, pose))
+         rng = math.sqrt(lidar[0] ** 2 + lidar[1] ** 2 + lidar[2] ** 2)
+         if RANGE_MIN_M <= rng <= RANGE_MAX_M:
+             out.append(self._cloud_tuple(
+                 lidar, rng, intensity, reflector, layer))
+ 
+-    def _raycast_obstacle_hits(self):
++    def _raycast_obstacle_hits(self, pose=None):
++        pose = pose or (self.base_x, self.base_y, self.heading)
+         sensor_height = (
+             self.robot.base_link_height_above_ground_m
+             + self.robot.lidar_z_from_base_link_m
+         )
+         return raycast_cylinders(
+             self.course.obstacles,
+-            self._lidar_origin_world(),
+-            self.heading,
++            self._lidar_origin_world(pose),
++            pose[2],
+             sensor_height,
+             LIDAR_AZIMUTH_MIN_RAD,
+             LIDAR_AZIMUTH_MAX_RAD,
+@@ -694,18 +709,19 @@
+             RANGE_MAX_M,
+         )
+ 
+-    def _build_cloud_points(self) -> list[tuple[float, float, float, float,
++    def _build_cloud_points(self, pose=None) -> list[tuple[float, float, float, float,
+                                                float, float, float, float]]:
++        pose = pose or (self.base_x, self.base_y, self.heading)
+         points: list[tuple[float, float, float, float,
+                            float, float, float, float]] = []
+         obstacle_hits = {
+             (hit.layer, round(hit.azimuth_rad, 9)): hit
+-            for hit in self._raycast_obstacle_hits()
++            for hit in self._raycast_obstacle_hits(pose)
+         }
+         azimuth_count = int(math.floor(
+             (LIDAR_AZIMUTH_MAX_RAD - LIDAR_AZIMUTH_MIN_RAD)
+             / LIDAR_HORIZONTAL_RES_RAD)) + 1
+-        origin_x, origin_y = self._lidar_origin_world()
++        origin_x, origin_y = self._lidar_origin_world(pose)
+         sensor_height = (
+             self.robot.base_link_height_above_ground_m
+             + self.robot.lidar_z_from_base_link_m
+@@ -743,7 +759,7 @@
+                     horizontal_distance = -sensor_height / tan_elevation
+                     floor_range = horizontal_distance / cos_elevation
+                     if RANGE_MIN_M <= floor_range <= RANGE_MAX_M:
+-                        world_angle = self.heading + azimuth
++                        world_angle = pose[2] + azimuth
+                         floor_x = origin_x + horizontal_distance * math.cos(
+                             world_angle)
+                         floor_y = origin_y + horizontal_distance * math.sin(
+@@ -769,17 +785,19 @@
+                     intensity,
+                     reflector,
+                     layer,
++                    pose,
+                 )
+         return points
+ 
+-    def _ground_truth_obstacle_points(self) -> list[tuple[float, float, float,
++    def _ground_truth_obstacle_points(self, pose=None) -> list[tuple[float, float, float,
+                                                          float, float, float,
+                                                          float, float]]:
++        pose = pose or (self.base_x, self.base_y, self.heading)
+         points: list[tuple[float, float, float, float,
+                            float, float, float, float]] = []
+-        for hit in self._raycast_obstacle_hits():
++        for hit in self._raycast_obstacle_hits(pose):
+             self._append_cloud_point(
+-                points, hit.x, hit.y, hit.z, OBSTACLE_RSSI, False, hit.layer)
++                points, hit.x, hit.y, hit.z, OBSTACLE_RSSI, False, hit.layer, pose)
+         return points
+ 
+     def _point_on_tape(self, x: float, y: float) -> bool:
+@@ -852,18 +870,18 @@
+             header=header, fields=fields, points=points)
+ 
+     def _publish_sensor_frame(self) -> None:
+-        stamp = self.get_clock().now().to_msg()
++        pose, stamp = self._sensor_pose_sample()
+         if self.publish_full_lidar_cloud:
+-            cloud_points = self._build_cloud_points()
++            cloud_points = self._build_cloud_points(pose)
+             pca_points = None
+         else:
+-            cloud_points = self._ground_truth_obstacle_points()
++            cloud_points = self._ground_truth_obstacle_points(pose)
+             pca_points = cloud_points
+         self.cloud_pub.publish(self._make_cloud(stamp, cloud_points))
+         self._publish_scan_fullframe(stamp, cloud_points)
+         if self.pca_gt_pub is not None:
+             if pca_points is None:
+-                pca_points = self._ground_truth_obstacle_points()
++                pca_points = self._ground_truth_obstacle_points(pose)
+             self.pca_gt_pub.publish(
+                 self._make_cloud(stamp, pca_points))
+ 

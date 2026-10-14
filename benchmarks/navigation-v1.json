@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "name": "navigation-v1-prototype",
+  "scenarios": ["straight", "turns", "obstacle", "ramp", "ramp-forbidden", "combined"],
+  "seeds": [1, 2, 3]
+}

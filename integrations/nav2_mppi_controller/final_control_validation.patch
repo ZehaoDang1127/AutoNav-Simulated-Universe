@@ -1,0 +1,335 @@
+diff --git a/nav2_mppi_controller/include/nav2_mppi_controller/calibrated_diff_drive.hpp b/nav2_mppi_controller/include/nav2_mppi_controller/calibrated_diff_drive.hpp
+index 207a640..a74ef37 100644
+--- a/nav2_mppi_controller/include/nav2_mppi_controller/calibrated_diff_drive.hpp
++++ b/nav2_mppi_controller/include/nav2_mppi_controller/calibrated_diff_drive.hpp
+@@ -4,13 +4,14 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <stdexcept>
++#include <vector>
+ #include "nav2_mppi_controller/motion_models.hpp"
+ #include "nav2_mppi_controller/models/optimizer_settings.hpp"
+ 
+ namespace mppi
+ {
+ // Predict the measured vehicle response without changing its command limits.
+-// Unobserved commands already in flight are initialized to measured velocity.
++// Optional command feedback models the smoother and commands already in flight.
+ class CalibratedDiffDriveMotionModel : public DiffDriveMotionModel
+ {
+ public:
+@@ -29,6 +30,36 @@ public:
+     }
+   }
+ 
++  struct CommandSample {double time; float vx; float wz;};
++
++  // One immutable command snapshot per controller evaluation. This is
++  // actuator-input feedback, never physical pose or absolute heading.
++  void setCommandFeedback(
++    const std::vector<CommandSample> & commands, double now, double frequency)
++  {
++    if (!(frequency > 0.0) || !std::isfinite(frequency)) {
++      throw std::invalid_argument("Invalid command smoothing frequency");
++    }
++    feedback_ = commands;
++    feedback_time_ = now;
++    smoother_period_ = 1.0 / frequency;
++    predict_smoothing_ = true;
++  }
++
++  // Account for the command smoother's bounded ramp to zero before the
++  // same calibrated latency and actuator response predict the braking body.
++  void brakeControlSequence(models::ControlSequence & sequence) const
++  {
++    for (size_t j = 1; j < sequence.vx.shape(0); ++j) {
++      sequence.vx(j) = std::copysign(
++        std::max(0.0f, std::abs(sequence.vx(j-1)) - linear_accel_*settings_.model_dt),
++        sequence.vx(j-1));
++      sequence.wz(j) = std::copysign(
++        std::max(0.0f, std::abs(sequence.wz(j-1)) - angular_accel_*settings_.model_dt),
++        sequence.wz(j-1));
++    }
++  }
++
+   void predict(models::State & state) override
+   {
+     const float dt = settings_.model_dt;
+@@ -49,14 +80,56 @@ public:
+     for (size_t i = 0; i < state.vx.shape(0); ++i) {
+       float v = state.vx(i,0), w = state.wz(i,0);
+       const float initial_v = v, initial_w = w;
++      const bool fresh_feedback = predict_smoothing_ && !feedback_.empty() &&
++        feedback_time_ >= feedback_.back().time &&
++        feedback_time_ - feedback_.back().time <= .25;
++      float smoothed_v = fresh_feedback ? feedback_.back().vx : initial_v;
++      float smoothed_w = fresh_feedback ? feedback_.back().wz : initial_w;
++      double next_smoothing = fresh_feedback ?
++        feedback_.back().time + smoother_period_ - feedback_time_ : smoother_period_;
++      // Feedback receipt can trail the publisher. Preserve the next tick
++      // phase without inventing additional acceleration at prediction time 0.
++      while (next_smoothing <= 0.0) {next_smoothing += smoother_period_;}
+       for (size_t j = 1; j < steps; ++j) {
+         for (int sub = 1; sub <= substeps; ++sub) {
+           const float time = (j-1)*dt + sub*sub_dt - latency_;
+           const int command = static_cast<int>(std::floor((time+1e-6f)/dt));
+-          const float target_v = time < -1e-6f ? initial_v :
+-            std::clamp(state.cvx(i,command), limits.vx_min, limits.vx_max);
+-          const float target_w = time < -1e-6f ? initial_w :
+-            std::clamp(state.cwz(i,command), -limits.wz, limits.wz);
++          float target_v = initial_v, target_w = initial_w;
++          if (predict_smoothing_) {
++            if (time < -1e-6f) {
++              // During transport latency, use the command that was actually
++              // sent at this past time, rather than holding measured velocity.
++              if (fresh_feedback) {
++                const double command_time = feedback_time_ + time;
++                for (const auto & issued : feedback_) {
++                  if (issued.time > command_time) {break;}
++                  target_v = issued.vx;
++                  target_w = issued.wz;
++                }
++              }
++            } else {
++              // Match the ROS-clock velocity smoother's discrete ramp before
++              // applying the calibrated actuator latency and response.
++              while (next_smoothing <= time + 1e-6) {
++                const size_t index = std::min(steps-1,
++                  static_cast<size_t>(std::floor((next_smoothing+1e-6)/dt)));
++                const float requested_v = std::clamp(state.cvx(i,index), limits.vx_min, limits.vx_max);
++                const float requested_w = std::clamp(state.cwz(i,index), -limits.wz, limits.wz);
++                const float dv = linear_accel_*smoother_period_;
++                const float dw = angular_accel_*smoother_period_;
++                smoothed_v += std::clamp(requested_v-smoothed_v, -dv, dv);
++                smoothed_w += std::clamp(requested_w-smoothed_w, -dw, dw);
++                next_smoothing += smoother_period_;
++              }
++              target_v = smoothed_v;
++              target_w = smoothed_w;
++            }
++          } else if (time >= -1e-6f) {
++            target_v = std::clamp(state.cvx(i,command), limits.vx_min, limits.vx_max);
++            target_w = std::clamp(state.cwz(i,command), -limits.wz, limits.wz);
++          }
++          target_v = std::clamp(target_v, limits.vx_min, limits.vx_max);
++          target_w = std::clamp(target_w, -limits.wz, limits.wz);
+           v += std::clamp(alpha_v*(target_v-v), -linear_accel_*sub_dt, linear_accel_*sub_dt);
+           w += std::clamp(alpha_w*(target_w-w), -angular_accel_*sub_dt, angular_accel_*sub_dt);
+         }
+@@ -67,6 +140,9 @@ public:
+   }
+ 
+ private:
++  std::vector<CommandSample> feedback_;
++  double feedback_time_{0.0}, smoother_period_{.05};
++  bool predict_smoothing_{false};
+   models::OptimizerSettings & settings_;
+   float latency_{.08f}, linear_tau_{.20f}, angular_tau_{.18f};
+   float linear_accel_{1.0f}, angular_accel_{2.0f};
+diff --git a/nav2_mppi_controller/include/nav2_mppi_controller/optimizer.hpp b/nav2_mppi_controller/include/nav2_mppi_controller/optimizer.hpp
+index b720057..daf0605 100644
+--- a/nav2_mppi_controller/include/nav2_mppi_controller/optimizer.hpp
++++ b/nav2_mppi_controller/include/nav2_mppi_controller/optimizer.hpp
+@@ -17,6 +17,8 @@
+ 
+ #include <string>
+ #include <memory>
++#include <mutex>
++#include <vector>
+ 
+ #include <xtensor/xtensor.hpp>
+ #include <xtensor/xview.hpp>
+@@ -33,6 +35,7 @@
+ 
+ #include "nav2_mppi_controller/models/optimizer_settings.hpp"
+ #include "nav2_mppi_controller/motion_models.hpp"
++#include "nav2_mppi_controller/calibrated_diff_drive.hpp"
+ #include "nav2_mppi_controller/critic_manager.hpp"
+ #include "nav2_mppi_controller/models/state.hpp"
+ #include "nav2_mppi_controller/models/trajectories.hpp"
+@@ -122,6 +125,11 @@ protected:
+    */
+   void optimize();
+ 
++  // Validate the final physical rollout; fall back to a safe sampled sequence.
++  bool validateControlSequence();
++  bool validateEmergencyStop();
++  bool selectCollisionFreeControl();
++
+   /**
+    * @brief Prepare state information on new request for trajectory rollouts
+    * @param robot_pose Pose of the robot at given time
+@@ -238,6 +246,10 @@ protected:
+   std::string name_;
+ 
+   std::shared_ptr<MotionModel> motion_model_;
++  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr command_feedback_subscription_;
++  std::mutex command_feedback_mutex_;
++  std::vector<CalibratedDiffDriveMotionModel::CommandSample> command_feedback_;
++  double command_smoothing_frequency_{20.0};
+ 
+   ParametersHandler * parameters_handler_;
+   CriticManager critic_manager_;
+diff --git a/nav2_mppi_controller/src/optimizer.cpp b/nav2_mppi_controller/src/optimizer.cpp
+index 3d47c23..1fa67e9 100644
+--- a/nav2_mppi_controller/src/optimizer.cpp
++++ b/nav2_mppi_controller/src/optimizer.cpp
+@@ -24,6 +24,8 @@
+ #include <xtensor/xmath.hpp>
+ #include <xtensor/xrandom.hpp>
+ #include <xtensor/xnoalias.hpp>
++#include <algorithm>
++#include <numeric>
+ 
+ #include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
+ 
+@@ -53,10 +55,36 @@ void Optimizer::initialize(
+   noise_generator_.initialize(settings_, isHolonomic(), name_, parameters_handler_);
+ 
+   reset();
++  std::string feedback_topic;
++  auto getParam = parameters_handler_->getParamGetter(name_);
++  getParam(feedback_topic, "command_feedback_topic", std::string(""), ParameterType::Static);
++  getParam(command_smoothing_frequency_, "command_smoothing_frequency", 20.0, ParameterType::Static);
++  if (!feedback_topic.empty() &&
++    dynamic_cast<CalibratedDiffDriveMotionModel *>(motion_model_.get()))
++  {
++    command_feedback_subscription_ = node->create_subscription<geometry_msgs::msg::Twist>(
++      feedback_topic, rclcpp::QoS(20),
++      [this](const geometry_msgs::msg::Twist::SharedPtr command) {
++        if (!std::isfinite(command->linear.x) || !std::isfinite(command->angular.z)) {return;}
++        auto parent = parent_.lock();
++        if (!parent) {return;}
++        const double now = parent->get_clock()->now().seconds();
++        std::lock_guard<std::mutex> lock(command_feedback_mutex_);
++        if (!command_feedback_.empty() && command_feedback_.back().time > now) {
++          command_feedback_.clear();
++        }
++        command_feedback_.push_back({now, static_cast<float>(command->linear.x),
++          static_cast<float>(command->angular.z)});
++        while (command_feedback_.size() > 1 && command_feedback_[1].time < now-.5) {
++          command_feedback_.erase(command_feedback_.begin());
++        }
++      });
++  }
+ }
+ 
+ void Optimizer::shutdown()
+ {
++  command_feedback_subscription_.reset();
+   noise_generator_.shutdown();
+ }
+ 
+@@ -138,13 +166,41 @@ geometry_msgs::msg::TwistStamped Optimizer::evalControl(
+   const nav_msgs::msg::Path & plan, nav2_core::GoalChecker * goal_checker)
+ {
+   prepare(robot_pose, robot_speed, plan, goal_checker);
++  if (command_feedback_subscription_) {
++    auto * calibrated = dynamic_cast<CalibratedDiffDriveMotionModel *>(motion_model_.get());
++    if (calibrated) {
++      std::lock_guard<std::mutex> lock(command_feedback_mutex_);
++      calibrated->setCommandFeedback(command_feedback_, parent_.lock()->get_clock()->now().seconds(),
++        command_smoothing_frequency_);
++    }
++  }
+ 
++  const auto previous_control_history = control_history_;
++  bool fail;
+   do {
++    // Retry resets must not invent a change in already issued controls.
++    control_history_ = previous_control_history;
+     optimize();
+-  } while (fallback(critics_data_.fail_flag));
++    fail = critics_data_.fail_flag;
++    if (!fail) {
++      auto filter_history = control_history_;
++      utils::savitskyGolayFilter(control_sequence_, filter_history, settings_);
++      applyControlSequenceConstraints();
++      if (dynamic_cast<CalibratedDiffDriveMotionModel *>(motion_model_.get())) {
++        fail = !selectCollisionFreeControl();
++      }
++    }
++  } while (fallback(fail));
+ 
+-  utils::savitskyGolayFilter(control_sequence_, control_history_, settings_);
+   auto control = getControlFromSequenceAsTwist(plan.header.stamp);
++  // The calibrated model sends command zero; record the actual issued action
++  // rather than the legacy filter's command-one history entry.
++  control_history_[0] = previous_control_history[1];
++  control_history_[1] = previous_control_history[2];
++  control_history_[2] = previous_control_history[3];
++  control_history_[3] = {
++    static_cast<float>(control.twist.linear.x), static_cast<float>(control.twist.linear.y),
++    static_cast<float>(control.twist.angular.z)};
+ 
+   if (settings_.shift_control_sequence) {
+     shiftControlSequence();
+@@ -153,6 +209,68 @@ geometry_msgs::msg::TwistStamped Optimizer::evalControl(
+   return control;
+ }
+ 
++bool Optimizer::validateControlSequence()
++{
++  // MPPI's weighted mean and temporal filter can cross an obstacle even when
++  // individual samples are safe. Re-score the final physical body trajectory.
++  models::State candidate;
++  candidate.reset(1, settings_.time_steps);
++  candidate.pose = state_.pose;
++  candidate.speed = state_.speed;
++  xt::view(candidate.cvx, 0, xt::all()) = control_sequence_.vx;
++  xt::view(candidate.cwz, 0, xt::all()) = control_sequence_.wz;
++  if (isHolonomic()) {xt::view(candidate.cvy, 0, xt::all()) = control_sequence_.vy;}
++  updateStateVelocities(candidate);
++  models::Trajectories trajectory;
++  trajectory.reset(1, settings_.time_steps);
++  integrateStateVelocities(trajectory, candidate);
++  auto costs = xt::zeros<float>({1u});
++  xt::xtensor<float, 1> score = costs;
++  CriticData data{candidate, trajectory, path_, score, settings_.model_dt, false,
++    critics_data_.goal_checker, motion_model_, std::nullopt, std::nullopt};
++  critic_manager_.evalTrajectoriesScores(data);
++  return !data.fail_flag;
++}
++
++bool Optimizer::validateEmergencyStop()
++{
++  auto * calibrated = dynamic_cast<CalibratedDiffDriveMotionModel *>(motion_model_.get());
++  if (!calibrated) {return true;}
++  // A path guard may halt FollowPath after this action. The physical body
++  // must remain clear while command smoothing, latency, and inertia brake it.
++  const auto requested = control_sequence_;
++  calibrated->brakeControlSequence(control_sequence_);
++  const bool safe = validateControlSequence();
++  control_sequence_ = requested;
++  return safe;
++}
++
++bool Optimizer::selectCollisionFreeControl()
++{
++  if (validateControlSequence() && validateEmergencyStop()) {return true;}
++  // Preserve motion when the blend is unsafe: select a scored sample, then
++  // validate its bounded control sequence against the same locked costmap.
++  std::vector<size_t> order(state_.cvx.shape(0));
++  std::iota(order.begin(), order.end(), 0);
++  std::stable_sort(order.begin(), order.end(),
++    [this](size_t a, size_t b) {return costs_(a) < costs_(b);});
++  for (const size_t sample : order) {
++    control_sequence_.vx = xt::view(state_.cvx, sample, xt::all());
++    control_sequence_.wz = xt::view(state_.cwz, sample, xt::all());
++    if (isHolonomic()) {control_sequence_.vy = xt::view(state_.cvy, sample, xt::all());}
++    // Apply the same temporal filter as the optimized mean, without
++    // committing history for a candidate that may never be issued.
++    auto filter_history = control_history_;
++    utils::savitskyGolayFilter(control_sequence_, filter_history, settings_);
++    applyControlSequenceConstraints();
++    if (validateControlSequence() && validateEmergencyStop()) {
++      RCLCPP_DEBUG(logger_, "Unsafe MPPI blend replaced with a validated sampled control");
++      return true;
++    }
++  }
++  return false;
++}
++
+ void Optimizer::optimize()
+ {
+   for (size_t i = 0; i < settings_.iteration_count; ++i) {

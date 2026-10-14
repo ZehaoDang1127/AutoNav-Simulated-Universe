@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "name": "gps-prototype",
+  "scenarios": ["gps-turn", "gps-blackout", "gps-bias", "gps-drift"],
+  "seeds": [1, 2, 3]
+}

@@ -1,5 +1,7 @@
 # AutoNav-Simulated-Universe
 
+The new shared-run prototype is documented in [UNIVERSE_README.md](UNIVERSE_README.md). It provides a headless navigation plug-in runner, scenarios, benchmark records, and an optional Qt viewer. The standalone simulators below remain available.
+
 Sister repo to **AutoNav_2025-2026**. Hosts the standalone simulators we
 use to develop and validate individual subsystems of the AutoNav robot
 before running them on the real hardware, plus the source-of-truth

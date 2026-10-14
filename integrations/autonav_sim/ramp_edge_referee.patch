@@ -1,0 +1,86 @@
+diff --git a/igvc_competition_sim/igvc_competition_sim/course_monitor.py b/igvc_competition_sim/igvc_competition_sim/course_monitor.py
+index 2c4cca9..84783ef 100644
+--- a/igvc_competition_sim/igvc_competition_sim/course_monitor.py
++++ b/igvc_competition_sim/igvc_competition_sim/course_monitor.py
+@@ -10,7 +10,7 @@ from pathlib import Path
+ from .course import Course, load_course
+ from .robot_profile import load_robot_profile
+ 
+-SCORE_SCHEMA_VERSION = 4
++SCORE_SCHEMA_VERSION = 5
+ 
+ try:
+     import rclpy
+@@ -161,7 +161,6 @@ class IgvcCourseMonitor(Node):
+         self.finish_reentry_margin_m = max(
+             0.0, float(self.get_parameter("finish_reentry_margin_m").value))
+         self.run_id = str(self.get_parameter("run_id").value).strip()
+-        self.ramp_monitor_lateral_margin_m = 1.0
+         hx = self.robot.physical_half_length_m + self.robot.footprint_padding_m
+         hy = self.robot.physical_half_width_m + self.robot.footprint_padding_m
+         self.robot_sweep_radius_m = (
+@@ -461,35 +460,26 @@ class IgvcCourseMonitor(Node):
+                 if ramp.center_x_m is not None
+                 else 0.5 * (ramp.start_x_m + ramp.end_x_m)
+             )
+-            corners = self._footprint_corners(nav_x, nav_y, yaw, hx, hy)
+-            local_corners = [
+-                self._world_to_frame(
+-                    corner[0], corner[1], center_x, ramp.center_y_m,
+-                    ramp.yaw_rad)
+-                for corner in corners
+-            ]
+-            min_local_x = min(point[0] for point in local_corners)
+-            max_local_x = max(point[0] for point in local_corners)
+-            if max_local_x < -half_run or min_local_x > half_run:
+-                continue
+-            _, local_nav_y = self._world_to_frame(
+-                nav_x, nav_y, center_x, ramp.center_y_m, ramp.yaw_rad)
+-            local_y_values = [point[1] for point in local_corners]
+-            lateral_radius = max(
+-                abs(local_y - local_nav_y) for local_y in local_y_values)
+-            edge_limit = ramp.width_m * 0.5
+-            if abs(local_nav_y) > (
+-                    edge_limit + lateral_radius
+-                    + self.ramp_monitor_lateral_margin_m):
+-                continue
+-            if min(local_y_values) < -edge_limit or (
+-                    max(local_y_values) > edge_limit):
+-                self._fail(
+-                    "ramp_edge_departure:" + ramp.name,
+-                    failure_type="ramp_edge_departure",
+-                    hazard=ramp.name,
+-                    pose=(base_x, base_y, yaw),
+-                )
++            # Departure requires intersecting an actual side edge. A body
++            # wholly beside the deck is not on the ramp, even when nearby.
++            # Use the same padded-body segment geometry and dense sweep as
++            # tape contact; both longitudinal ends remain open for traversal.
++            c, s = math.cos(ramp.yaw_rad), math.sin(ramp.yaw_rad)
++            for side in (-1.0, 1.0):
++                edge_y = side * ramp.width_m * 0.5
++                edge = [
++                    (center_x + c * edge_x - s * edge_y,
++                     ramp.center_y_m + s * edge_x + c * edge_y)
++                    for edge_x in (-half_run, half_run)
++                ]
++                if self._segment_hits_body(
++                        edge[0], edge[1], 0.0, nav_x, nav_y, yaw, hx, hy):
++                    self._fail(
++                        "ramp_edge_departure:" + ramp.name,
++                        failure_type="ramp_edge_departure",
++                        hazard=ramp.name,
++                        pose=(base_x, base_y, yaw),
++                    )
+ 
+     def _segment_hits_body(self,
+                            start: tuple[float, float],
+@@ -589,7 +579,7 @@ class IgvcCourseMonitor(Node):
+             last_odom_age_s = max(0.0, score_time_s - self.last_odom_time_s)
+         score = {
+             "score_schema_version": SCORE_SCHEMA_VERSION,
+-            "scoring_mode": "ground_truth_odom_swept_footprint_v4",
++            "scoring_mode": "ground_truth_odom_swept_footprint_v5",
+             "run_id": self.run_id,
+             "course_id": self.course.course_id,
+             "course_config": str(self.course.config_path),

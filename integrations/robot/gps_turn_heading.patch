@@ -1,0 +1,80 @@
+diff --git a/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py b/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
+index 51b932f..270f036 100644
+--- a/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
++++ b/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
+@@ -1379,59 +1379,28 @@ class GpsHandlerNode(Node):
+             self._next_hint_smoothed_candidate = (sx + a * dx, sy + a * dy)
+ 
+     def _inject_gps_cog_theta_measurement(self) -> None:
+-        """Lock held. Continuous GPS-CoG + IMU-yaw θ measurement.
+-
+-        Replaces ``_maybe_resync_heading`` / ``_periodic_heading_refit``
+-        / ``_force_heading_resync`` (all three disabled — see their
+-        docstrings). Those paths fed θ values derived from
+-        ``atan2(odom_displacement)`` into the EKF, which means encoder
+-        yaw bias propagated straight into the heading estimate every
+-        time they fired. THIS path uses no odom angle:
+-
+-            cog_gps   = atan2(gps[-1] − gps[-N])     # world-frame
+-                                                      # direction of motion
+-            theta_obs = cog_gps − last_odom_yaw       # last_odom_yaw is
+-                                                      # /local_ekf/odom yaw
+-                                                      # — IMU-fused, no
+-                                                      # encoder bias
+-            ekf.update_theta_measurement(theta_obs, σ=2°)
+-
+-        Why this works: GPS noise is zero-mean centered on truth, so
+-        averaging many CoG samples converges to the true direction of
+-        motion. ``_last_odom_yaw`` comes from ``/local_ekf/odom`` which
+-        fuses IMU + wheels — IMU dominates short-term so the encoder
+-        bias never reaches this signal. The difference (= world rotation
+-        between odom and world) is exactly what θ is supposed to be.
+-
+-        Gated on:
+-          * bootstrap done (don't fight the bootstrap reset_theta path)
+-          * ≥ 8 GPS samples in history (need a window)
+-          * baseline ≥ 1.5 m over the window (sub-baseline → CoG
+-            uncertainty σ ≈ σ_pos / baseline dominates GPS noise)
+-
+-        Called from ``_odom_callback`` on every odom tick. Pairs with
+-        ``gps_ekf.predict``'s zeroed F[0,2]/F[1,2] cross-terms (which
+-        prevent GPS position updates from rotating θ via correlation):
+-        together they make the EKF's θ depend ONLY on GPS-CoG +
+-        IMU-yaw, with no contribution from raw odom integration.
++        """Fit world-to-odom rotation from paired GPS and odom motion.
++
++        A GPS course measured over several seconds cannot be compared to
++        the robot's instantaneous yaw while it turns. Both displacement
++        vectors must span the same samples. The short-window fit rejects
++        inconsistent displacement magnitudes and needs 1.5 m of travel.
+         """
+         if not self._bootstrap_done:
+             return
+         if len(self._gps_history) < 8:
+             return
+-        # Window of the most recent samples — ~3 s at 10 Hz GPS.
+-        n = min(30, len(self._gps_history))
+-        old_gps = self._gps_history[-n][1]
+-        new_gps = self._gps_history[-1][1]
+-        dx = new_gps[0] - old_gps[0]
+-        dy = new_gps[1] - old_gps[1]
+-        baseline = math.hypot(dx, dy)
+-        if baseline < 1.5:
++        # Compare GPS and odom displacement over the *same* window.
++        # Subtracting the instantaneous IMU yaw from a windowed GPS course
++        # biases theta during turns and moves distant goals sideways.
++        # The compact simulator publishes GPS at 2 Hz, so thirty samples
++        # cover about 15 s. Paired displacement remains valid through
++        # turns, and the longer baseline reduces lateral goal noise.
++        theta_obs, baseline = closed_form_theta_window(
++            self._gps_history, n_samples=30, min_baseline=1.5,
++        )
++        if theta_obs is None or baseline < 1.5:
+             return
+-        cog_gps = math.atan2(dy, dx)
+-        theta_obs = wrap_pi(cog_gps - self._last_odom_yaw)
+-        # Tight σ — this is now the EKF's primary θ source. Wider σ
+-        # lets θ coast; tighter σ keeps it pinned to GPS-CoG.
+         sigma_rad = math.radians(2.0)
+         self._ekf.update_theta_measurement(theta_obs, sigma_rad)
+ 

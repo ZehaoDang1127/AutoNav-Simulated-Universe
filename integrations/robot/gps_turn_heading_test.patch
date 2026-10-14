@@ -1,0 +1,32 @@
+diff --git a/isaac_ros-dev/src/gps_waypoint_handler/test/test_gps_ekf.py b/isaac_ros-dev/src/gps_waypoint_handler/test/test_gps_ekf.py
+index 9348a31..0e3f93f 100644
+--- a/isaac_ros-dev/src/gps_waypoint_handler/test/test_gps_ekf.py
++++ b/isaac_ros-dev/src/gps_waypoint_handler/test/test_gps_ekf.py
+@@ -50,6 +50,27 @@ def _build_stream(
+     return odom_deltas, history
+ 
+ 
++def test_paired_heading_fit_stays_stable_during_turn() -> None:
++    """Windowed GPS travel must be compared with windowed odom travel."""
++    history: List[HistoryEntry] = []
++    x = y = 0.0
++    for i in range(30):
++        yaw = -0.5 * i / 29
++        x += 0.3 * math.cos(yaw)
++        y += 0.3 * math.sin(yaw)
++        # World and odom frames are aligned, even though the robot turns.
++        history.append((i * 0.5, (x, y), (x, y)))
++    theta, baseline = closed_form_theta_window(
++        history, n_samples=30, min_baseline=1.5,
++    )
++    assert baseline > 1.5
++    assert theta is not None and abs(theta) < 1e-10
++    dx = history[-1][1][0] - history[0][1][0]
++    dy = history[-1][1][1] - history[0][1][1]
++    old_theta = wrap_pi(math.atan2(dy, dx) - (-0.5))
++    assert old_theta > 0.15  # instantaneous-yaw method was biased
++
++
+ def test_predict_pure_motion_no_gps() -> None:
+     """Predict alone should advance world position by R(θ)·odom."""
+     ekf = GpsEkf(theta0=math.radians(30.0), theta_var0=1e-4)

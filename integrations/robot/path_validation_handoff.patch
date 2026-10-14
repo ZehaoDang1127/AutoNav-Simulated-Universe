@@ -1,0 +1,89 @@
+--- a/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_footprint_safe_condition.cpp
++++ b/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_footprint_safe_condition.cpp
+@@ -44,6 +44,11 @@
+   {
+     return {
+       BT::InputPort<nav_msgs::msg::Path>("path", "Path to validate before FollowPath"),
++      BT::OutputPort<nav_msgs::msg::Path>("validated_path", "Written only on successful validation"),
++      BT::InputPort<bool>("validate_remaining", false,
++        "Check current robot pose and remaining controller route, excluding traveled poses"),
++      BT::InputPort<double>("validation_distance_m", -1.0,
++        "Limit remaining route checks for rolling costmaps; negative checks the whole route"),
+       BT::InputPort<std::string>(
+         "costmap_topic", "global_costmap/costmap_raw",
+         "Raw global costmap topic used for footprint validation"),
+@@ -119,7 +124,6 @@
+     getInput("max_yaw_step_rad", max_yaw_step_rad);
+     getInput("max_costmap_age_ms", max_costmap_age_ms);
+ 
+-    (void)robot_base_frame;
+     pose_stride = std::max(1, pose_stride);
+     max_pose_step_m = std::max(0.001, max_pose_step_m);
+     max_yaw_step_rad = std::max(0.001, max_yaw_step_rad);
+@@ -176,6 +180,56 @@
+         return BT::NodeStatus::FAILURE;
+       }
+       global_poses.push_back(pose);
++    }
++
++    bool validate_remaining = false;
++    getInput("validate_remaining", validate_remaining);
++    if (validate_remaining) {
++      geometry_msgs::msg::PoseStamped current;
++      current.header.frame_id = robot_base_frame;
++      current.pose.orientation.w = 1.0;
++      if (!transformPose(current, global_frame)) {
++        RCLCPP_WARN_THROTTLE(
++          node_->get_logger(), *node_->get_clock(), 2000,
++          "PathFootprintSafe: current robot transform unavailable");
++        return BT::NodeStatus::FAILURE;
++      }
++      // FollowPath prunes traveled poses. Rechecking those against newly
++      // observed obstacles can falsely block an otherwise safe remaining route.
++      size_t nearest = 0;
++      double nearest_distance = std::numeric_limits<double>::infinity();
++      for (size_t i = 0; i < global_poses.size(); ++i) {
++        const auto & p = global_poses[i].pose.position;
++        const double distance = std::hypot(
++          p.x - current.pose.position.x, p.y - current.pose.position.y);
++        if (distance < nearest_distance) {
++          nearest_distance = distance;
++          nearest = i;
++        }
++      }
++      global_poses.erase(global_poses.begin(), global_poses.begin() + nearest);
++      // Include the measured pose and the swept connection back to the route;
++      // checking only planner poses would miss a deviating robot footprint.
++      global_poses.insert(global_poses.begin(), current);
++      double validation_distance = -1.0;
++      getInput("validation_distance_m", validation_distance);
++      if (validation_distance > 0.0) {
++        double distance = 0.0;
++        for (size_t i = 1; i < global_poses.size(); ++i) {
++          const auto & a = global_poses[i - 1].pose.position;
++          const auto & b = global_poses[i].pose.position;
++          const double segment = std::hypot(b.x - a.x, b.y - a.y);
++          if (distance + segment >= validation_distance) {
++            if (segment > 1e-9) {
++              global_poses[i] = interpolatePose(
++                global_poses[i - 1], global_poses[i], (validation_distance - distance) / segment);
++            }
++            global_poses.resize(i + 1);
++            break;
++          }
++          distance += segment;
++        }
++      }
+     }
+ 
+     auto validate_pose = [&](const geometry_msgs::msg::PoseStamped & pose, const char * where) {
+@@ -218,6 +272,9 @@
+       }
+     }
+ 
++    if (config().output_ports.count("validated_path") != 0) {
++      setOutput("validated_path", path);
++    }
+     return BT::NodeStatus::SUCCESS;
+   }
+ 

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonav-universe"
+version = "0.1.0"
+description = "Shared navigation simulation and evaluation runner"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PyQt5==5.15.11"]
+
+[project.scripts]
+autonav-universe = "autonav_universe.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autonav_universe = ["data/scenarios/*.json", "data/benchmarks/*.json"]

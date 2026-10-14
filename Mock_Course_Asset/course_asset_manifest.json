@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "status": "asset_diagnostic",
+  "asset_semantics_complete": false,
+  "release_ready": false,
+  "course_id": "local_mock_course",
+  "source_asset_sha256": "789f974d627bccf5f48579a350223462d23d76fa9645954fa5edc27c7b33380d",
+  "metadata_sha256": "e58a57f8b92eec7833144111b379d165dae0f7aa2c949c5b225aa6cfee3922f2",
+  "semantics_sha256": "4209dae20e66930ed3a5990b3b3cf6bd7ab488e1d0315d216cf924beca18001a",
+  "course_yaml_sha256": "dd8ce2ec84573e449d2dc5699e7844f10b9c48e60a6cbdd599f13a91bb5220c1",
+  "world_sdf_sha256": "0b5db368ccd3149e9c862b3e618992c07d5fdd9f7303d764b141bf4a177a839c",
+  "simulator_revision": "46b8e9aa953160b2d317fcc811e209fed46a52f4",
+  "robot_revision": "00875b391b9ea897681893ec063c99a3d9d32835",
+  "blender_version": "5.0.1",
+  "object_count": 83,
+  "geometry_check": {
+    "passed": true,
+    "detail": "grid=880x920 r_in=0.46m free=82% wp=5 | all waypoints + finish reachable from start"
+  },
+  "semantic_gaps": [
+    "pothole_objects: expected at least 1 authored object(s)",
+    "no_mans_land_objects: expected at least 1 authored object(s)",
+    "internal_boundary_objects: expected at least 1 authored object(s)",
+    "finish_gate_objects: expected at least 1 authored object(s)",
+    "referee_checkpoint_objects: expected at least 1 authored object(s)",
+    "upstream mission has 5 GPS goals; release requires four",
+    "finish: no explicitly typed finish object",
+    "ground footprint 38.000 x 38.000 m exceeds 36.576 x 30.48 m reference"
+  ],
+  "limitations": [
+    "The SDF is generated from semantic YAML, not a direct collision export of every Blender mesh.",
+    "Connectivity, sensor visibility, localization, and ROS/Gazebo operation require runtime verification."
+  ]
+}

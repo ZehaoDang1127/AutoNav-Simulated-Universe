@@ -1,0 +1,49 @@
+--- a/igvc_competition_sim/launch/igvc_competition.launch.py
++++ b/igvc_competition_sim/launch/igvc_competition.launch.py
+@@ -599,12 +599,12 @@
+         output="screen",
+         parameters=[{
+             "use_sim_time": True,
+-            "target_frame": "base_link",
++            "target_frame": "lidar_planar",
+             "queue_size": 1,
+             "min_height": -0.10,
+             "max_height": 1.50,
+-            "angle_min": -1.5708,
+-            "angle_max": 1.5708,
++            "angle_min": -1.2217,
++            "angle_max": 1.2217,
+             "angle_increment": 0.0087,
+             "scan_time": 0.1,
+             "range_min": 0.30,
+@@ -625,7 +625,7 @@
+         output="screen",
+         parameters=[{
+             "use_sim_time": True,
+-            "target_frame": "base_link",
++            "target_frame": "lidar_planar",
+             "queue_size": 1,
+             "min_height": -0.10,
+             "max_height": 1.50,
+@@ -744,6 +744,21 @@
+         pca_scan,
+         pca_scan_clear,
+         gps_handler,
++        OpaqueFunction(function=_lidar_planar_frame_process),
+         OpaqueFunction(function=_breadcrumb_buffer_process),
+         OpaqueFunction(function=_nav2_process),
+     ])
++
++
++def _lidar_planar_frame_process(context, *args, **kwargs):
++    # LaserScan ray origins must share the sensor's XY mount. An upright
++    # ground-projected frame retains the existing PCA height filter while
++    # avoiding the physical lidar mount's upside-down roll.
++    geometry = _active_robot_profile(context).geometry
++    if geometry is None:
++        from igvc_competition_sim.course import load_course
++        geometry = load_course(LaunchConfiguration("course_config").perform(context)).robot
++    return [Node(package="tf2_ros", executable="static_transform_publisher",
++                 name="lidar_planar_transform", output="screen",
++                 arguments=[str(geometry.lidar_x_from_base_link_m), "0", "0", "0", "0", "0",
++                            "base_link", "lidar_planar"])]

@@ -1,0 +1,62 @@
+--- a/igvc_competition_sim/launch/igvc_competition.launch.py
++++ b/igvc_competition_sim/launch/igvc_competition.launch.py
+@@ -161,6 +161,11 @@
+         directory = os.environ.get("RUN_DIR") or tempfile.mkdtemp(prefix="igvc-physics-imu-")
+         description = save_runtime_input(add_imu_to_description(
+             _load_robot_description(description)), "robot_with_imu.urdf", directory)
++    if _truthy(context, "use_ground_truth_pose"):
++        from igvc_competition_sim.physics_imu import add_physical_pose_to_description, save_runtime_input
++        directory = os.environ.get("RUN_DIR") or tempfile.mkdtemp(prefix="igvc-physics-pose-")
++        description = save_runtime_input(add_physical_pose_to_description(
++            _load_robot_description(description), profile.name), "robot_with_imu.urdf", directory)
+     return [
+         Node(
+             package="igvc_competition_sim",
+@@ -398,7 +403,7 @@
+                 "course_config": LaunchConfiguration("course_config"),
+                 "gazebo_odom_topic": _active_robot_profile(context).gz_odom_topic,
+                 "ground_truth_pose_topic": (
+-                    "/world/igvc_competition/dynamic_pose/info"
++                    "/igvc_sim/physics_pose"
+                     if _truthy(context, "use_ground_truth_pose") else ""),
+                 "robot_profile": LaunchConfiguration("robot_profile"),
+                 "fallback_integrate_cmd": LaunchConfiguration(
+@@ -507,6 +512,12 @@
+     if _truthy(context, "launch_local_ekf"):
+         bridge_args.append("/igvc_sim/physics_imu@sensor_msgs/msg/Imu[gz.msgs.IMU")
+     if _truthy(context, "use_ground_truth_pose"):
++        # OdometryPublisher retains the physical acquisition timestamp in
++        # each pose. PosePublisher's model Pose_V entries have zero stamps.
++        bridge_args.extend([
++            "/igvc_sim/physics_pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
++            "/igvc_sim/physics_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
++        ])
+         # TRUE physics poses of every model -> ROS, so the harness can place
+         # sensors + score on the real robot pose instead of dead-reckoned odom.
+         bridge_args.append(
+--- a/igvc_competition_sim/igvc_competition_sim/physics_imu.py
++++ b/igvc_competition_sim/igvc_competition_sim/physics_imu.py
+@@ -72,3 +72,23 @@
+         node.destroy_node()
+         if rclpy.ok():
+             rclpy.shutdown()
++
++
++def add_physical_pose_to_description(description: str, model_name: str) -> str:
++    """Timestamped world pose for synthetic sensors and referee diagnostics."""
++    root = ET.fromstring(description)
++    if root.tag != 'robot' or root.find("link[@name='base_link']") is None:
++        raise ValueError('Physical pose publisher requires a URDF base_link')
++    if not any(p.get('name') == 'ignition::gazebo::systems::OdometryPublisher'
++               for p in root.findall('gazebo/plugin')):
++        gazebo = ET.SubElement(root, 'gazebo')
++        plugin = ET.SubElement(gazebo, 'plugin',
++            filename='ignition-gazebo-odometry-publisher-system',
++            name='ignition::gazebo::systems::OdometryPublisher')
++        for key, value in (('odom_frame', 'world'), ('robot_base_frame', model_name),
++                           ('odom_publish_frequency', '50'), ('dimensions', '2'),
++                           ('odom_topic', '/igvc_sim/physics_odom'),
++                           ('odom_covariance_topic', '/igvc_sim/physics_odom_covariance'),
++                           ('tf_topic', '/igvc_sim/physics_pose')):
++            ET.SubElement(plugin, key).text = value
++    return ET.tostring(root, encoding='unicode')

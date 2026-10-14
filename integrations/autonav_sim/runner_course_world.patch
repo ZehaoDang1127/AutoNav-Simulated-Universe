@@ -1,0 +1,55 @@
+diff --git a/igvc_competition_sim/Run_IGVC_COMPETITION_FORTRESS_TEST.command b/igvc_competition_sim/Run_IGVC_COMPETITION_FORTRESS_TEST.command
+index fc029ad..2977c1c 100755
+--- a/igvc_competition_sim/Run_IGVC_COMPETITION_FORTRESS_TEST.command
++++ b/igvc_competition_sim/Run_IGVC_COMPETITION_FORTRESS_TEST.command
+@@ -4,6 +4,7 @@ set -euo pipefail
+ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ ROS_WS="${ROS_WS:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+ COURSE_CONFIG="${COURSE_CONFIG:-}"
++WORLD="${WORLD:-}"
+ RUN_DIR="${RUN_DIR:-}"
+ MISSION_TIMEOUT_SEC="${MISSION_TIMEOUT_SEC:-420}"
+ STARTUP_WAIT_SEC="${STARTUP_WAIT_SEC:-12}"
+@@ -44,6 +45,20 @@ pkg_share() {
+ SIM_SHARE="$(pkg_share igvc_competition_sim)"
+ SLAM_SHARE="$(pkg_share slam)"
+ COURSE_CONFIG="${COURSE_CONFIG:-$SIM_SHARE/config/igvc_competition_compact.yaml}"
++if [[ -z "$WORLD" ]]; then
++  if [[ "$COURSE_CONFIG" == "$SIM_SHARE/config/igvc_competition_compact.yaml" ]]; then
++    WORLD="$SIM_SHARE/worlds/igvc_competition_compact.sdf"
++  else
++    echo "Set WORLD to the SDF generated from COURSE_CONFIG; refusing to pair a custom course with the compact world." >&2
++    exit 2
++  fi
++fi
++for input in "$COURSE_CONFIG" "$WORLD"; do
++  if [[ ! -f "$input" ]]; then
++    echo "Required course/world file is missing: $input" >&2
++    exit 2
++  fi
++done
+ DYNAMICS_CALIBRATION="${DYNAMICS_CALIBRATION:-$SIM_SHARE/config/dynamics_calibration.yaml}"
+ if [[ -z "${NAV2_PARAMS:-}" ]]; then
+   if [[ "$LINE_DETECTION_MODE" == "lidar" ]]; then
+@@ -60,8 +75,13 @@ if [[ -z "$PUBLISH_FULL_LIDAR_CLOUD" ]]; then
+   fi
+ fi
+ RUN_DIR="${RUN_DIR:-$SCRIPT_DIR/fortress_runs/$(basename "$COURSE_CONFIG" .yaml)_$(date +%Y%m%d_%H%M%S)}"
++if [[ ! -f "$NAV2_PARAMS" ]]; then
++  echo "Nav2 parameter file is missing: $NAV2_PARAMS" >&2
++  exit 2
++fi
+ 
+ mkdir -p "$RUN_DIR"
++sha256sum "$COURSE_CONFIG" "$WORLD" "$NAV2_PARAMS" > "$RUN_DIR/input_hashes.sha256"
+ 
+ stop_process() {
+   local pid="$1"
+@@ -115,6 +135,7 @@ trap cleanup EXIT INT TERM
+ 
+ setsid ros2 launch igvc_competition_sim igvc_competition.launch.py \
+   course_config:="$COURSE_CONFIG" \
++  world:="$WORLD" \
+   ground_truth_pca:="$GROUND_TRUTH_PCA" \
+   publish_full_lidar_cloud:="$PUBLISH_FULL_LIDAR_CLOUD" \
+   line_detection_mode:="$LINE_DETECTION_MODE" \

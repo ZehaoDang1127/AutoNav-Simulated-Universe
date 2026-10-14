@@ -1,0 +1,245 @@
+--- /dev/null
++++ b/nav2_smac_planner/include/nav2_smac_planner/traveled_corridor.hpp
+@@ -0,0 +1,107 @@
++// Route preference learned from estimated odometry, never from course geometry.
++#ifndef NAV2_SMAC_PLANNER__TRAVELED_CORRIDOR_HPP_
++#define NAV2_SMAC_PLANNER__TRAVELED_CORRIDOR_HPP_
++#include <algorithm>
++#include <cmath>
++#include <deque>
++#include <mutex>
++#include <string>
++#include <vector>
++#include "nav2_costmap_2d/costmap_2d.hpp"
++#include "nav2_costmap_2d/cost_values.hpp"
++
++namespace nav2_smac_planner {
++class TraveledCorridor {
++public:
++  struct FrameTransform {
++    std::string source_frame, target_frame;
++    double x, y, yaw;
++  };
++  std::string frame() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return frame_;
++  }
++  void record(double x, double y, const std::string & frame) {
++    if (!std::isfinite(x) || !std::isfinite(y) || frame.empty()) return;
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (frame_ != frame) {points_.clear(); frame_ = frame; distance_ = 0;}
++    if (!points_.empty()) {
++      const double step = std::hypot(x-points_.back().x, y-points_.back().y);
++      if (step < 0.10) return;
++      // A localization reset is not evidence of a traversable connection.
++      if (step > 2.0) {points_.clear(); distance_ = 0;}
++      else distance_ += step;
++    }
++    points_.push_back({x, y, distance_});
++    if (points_.size() > 20000) points_.pop_front();
++  }
++
++  bool applyReturnMask(nav2_costmap_2d::Costmap2D & map, double goal_x,
++    double goal_y, const std::string & frame, double radius,
++    double goal_distance, double minimum_travel,
++    const FrameTransform * transform = nullptr) const
++  {
++    std::vector<Point> points;
++    {
++      std::lock_guard<std::mutex> lock(mutex_);
++      if (points_.size() < 2) return false;
++      if (frame != frame_ && (!transform || transform->source_frame != frame_ ||
++          transform->target_frame != frame || !std::isfinite(transform->x) ||
++          !std::isfinite(transform->y) || !std::isfinite(transform->yaw))) return false;
++      points.assign(points_.begin(), points_.end());
++      if (frame != frame_) {
++        const double c = std::cos(transform->yaw), s = std::sin(transform->yaw);
++        for (auto & p : points) {
++          const double x = p.x, y = p.y;
++          p.x = transform->x + c*x - s*y;
++          p.y = transform->y + s*x + c*y;
++        }
++      }
++      bool revisited = false;
++      for (const auto & p : points) {
++        if (distance_-p.distance >= minimum_travel &&
++            std::hypot(goal_x-p.x, goal_y-p.y) <= goal_distance) {
++          revisited = true; break;
++        }
++      }
++      if (!revisited) return false;
++    }
++    const int width = map.getSizeInCellsX(), height = map.getSizeInCellsY();
++    const double res = map.getResolution(), ox = map.getOriginX(), oy = map.getOriginY();
++    std::vector<bool> allowed(width*height, false);
++    const auto stamp = [&](double x, double y) {
++      const int x0 = std::max(0, static_cast<int>(std::floor((x-radius-ox)/res)));
++      const int y0 = std::max(0, static_cast<int>(std::floor((y-radius-oy)/res)));
++      const int x1 = std::min(width-1, static_cast<int>(std::floor((x+radius-ox)/res)));
++      const int y1 = std::min(height-1, static_cast<int>(std::floor((y+radius-oy)/res)));
++      for (int my=y0; my<=y1; ++my) for (int mx=x0; mx<=x1; ++mx) {
++        if (std::hypot(ox+(mx+.5)*res-x, oy+(my+.5)*res-y) <= radius) {
++          allowed[my*width+mx] = true;
++        }
++      }
++    };
++    stamp(points.front().x, points.front().y);
++    for (size_t i=1; i<points.size(); ++i) {
++      const auto & a=points[i-1]; const auto & b=points[i];
++      const int steps=std::max(1,static_cast<int>(std::ceil(std::hypot(b.x-a.x,b.y-a.y)/0.10)));
++      for (int j=1; j<=steps; ++j) {
++        const double f=static_cast<double>(j)/steps;
++        stamp(a.x+f*(b.x-a.x), a.y+f*(b.y-a.y));
++      }
++    }
++    // Modify the private planning snapshot only. Never lower sensed costs.
++    auto * costs=map.getCharMap();
++    for (size_t i=0; i<allowed.size(); ++i) {
++      if (!allowed[i]) costs[i]=nav2_costmap_2d::LETHAL_OBSTACLE;
++    }
++    return true;
++  }
++private:
++  struct Point {double x, y, distance;};
++  mutable std::mutex mutex_;
++  std::deque<Point> points_;
++  std::string frame_;
++  double distance_{0};
++};
++}  // namespace nav2_smac_planner
++#endif
+--- a/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
++++ b/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
+@@ -20,6 +20,8 @@
+ #include <string>
+ 
+ #include "nav2_smac_planner/a_star.hpp"
++#include "nav2_smac_planner/traveled_corridor.hpp"
++#include "nav_msgs/msg/odometry.hpp"
+ #include "nav2_smac_planner/smoother.hpp"
+ #include "nav2_smac_planner/utils.hpp"
+ #include "nav_msgs/msg/occupancy_grid.hpp"
+@@ -86,6 +88,13 @@
+     const geometry_msgs::msg::PoseStamped & goal) override;
+ 
+ protected:
++  nav_msgs::msg::Path createPlanImpl(const geometry_msgs::msg::PoseStamped & start,
++    const geometry_msgs::msg::PoseStamped & goal, bool prefer_traveled, bool * used_corridor = nullptr);
++  TraveledCorridor _traveled_corridor;
++  std::shared_ptr<tf2_ros::Buffer> _travel_tf;
++  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr _travel_subscription;
++  bool _prefer_traveled_return{false};
++  double _traveled_radius{1.5}, _revisit_distance{1.5}, _revisit_minimum_travel{20.0};
+   /**
+    * @brief Callback executed when a paramter change is detected
+    * @param parameters list of changed parameters
+--- a/nav2_smac_planner/src/smac_planner_lattice.cpp
++++ b/nav2_smac_planner/src/smac_planner_lattice.cpp
+@@ -20,6 +20,7 @@
+ 
+ #include "Eigen/Core"
+ #include "nav2_smac_planner/smac_planner_lattice.hpp"
++#include "tf2/utils.h"
+ #include "nav2_smac_planner/lattice_start.hpp"
+ #include "nav2_smac_planner/lattice_goal.hpp"
+ 
+@@ -48,10 +49,11 @@
+ 
+ void SmacPlannerLattice::configure(
+   const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
+-  std::string name, std::shared_ptr<tf2_ros::Buffer>/*tf*/,
++  std::string name, std::shared_ptr<tf2_ros::Buffer> tf,
+   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
+ {
+   _node = parent;
++  _travel_tf = tf;
+   auto node = parent.lock();
+   _logger = node->get_logger();
+   _clock = node->get_clock();
+@@ -62,6 +64,26 @@
+   _raw_plan_publisher = node->create_publisher<nav_msgs::msg::Path>("unsmoothed_plan", 1);
+ 
+   RCLCPP_INFO(_logger, "Configuring %s of type SmacPlannerLattice", name.c_str());
++
++  nav2_util::declare_parameter_if_not_declared(node, name + ".prefer_traveled_return", rclcpp::ParameterValue(false));
++  nav2_util::declare_parameter_if_not_declared(node, name + ".traveled_corridor_radius", rclcpp::ParameterValue(1.5));
++  nav2_util::declare_parameter_if_not_declared(node, name + ".revisit_goal_distance", rclcpp::ParameterValue(1.5));
++  nav2_util::declare_parameter_if_not_declared(node, name + ".revisit_minimum_travel", rclcpp::ParameterValue(20.0));
++  nav2_util::declare_parameter_if_not_declared(node, name + ".traveled_odom_topic", rclcpp::ParameterValue(std::string("/odom")));
++  node->get_parameter(name + ".prefer_traveled_return", _prefer_traveled_return);
++  node->get_parameter(name + ".traveled_corridor_radius", _traveled_radius);
++  node->get_parameter(name + ".revisit_goal_distance", _revisit_distance);
++  node->get_parameter(name + ".revisit_minimum_travel", _revisit_minimum_travel);
++  if (_traveled_radius <= 0 || _revisit_distance <= 0 || _revisit_minimum_travel <= 0) {
++    throw std::invalid_argument("Traveled corridor dimensions must be positive");
++  }
++  if (_prefer_traveled_return) {
++    _travel_subscription = node->create_subscription<nav_msgs::msg::Odometry>(
++      node->get_parameter(name + ".traveled_odom_topic").as_string(), rclcpp::SensorDataQoS(),
++      [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
++        _traveled_corridor.record(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->header.frame_id);
++      });
++  }
+ 
+   // General planner params
+   double analytic_expansion_max_length_m;
+@@ -233,6 +255,8 @@
+   RCLCPP_INFO(
+     _logger, "Cleaning up plugin %s of type SmacPlannerLattice",
+     _name.c_str());
++  _travel_subscription.reset();
++  _travel_tf.reset();
+   _a_star.reset();
+   _smoother.reset();
+   _raw_plan_publisher.reset();
+@@ -243,6 +267,23 @@
+   const geometry_msgs::msg::PoseStamped & goal)
+ {
+   std::lock_guard<std::mutex> lock_reinit(_mutex);
++  if (_prefer_traveled_return) {
++    // Do not reset a global GPS history with an odom-frame planner pose.
++    if (_traveled_corridor.frame() == start.header.frame_id) {
++      _traveled_corridor.record(start.pose.position.x, start.pose.position.y, start.header.frame_id);
++    }
++    bool used_corridor = false;
++    auto plan = createPlanImpl(start, goal, true, &used_corridor);
++    if (!plan.poses.empty() || !used_corridor) return plan;
++    RCLCPP_WARN(_logger, "Traveled return route unavailable; retrying unrestricted sensed-map planning");
++  }
++  return createPlanImpl(start, goal, false);
++}
++
++nav_msgs::msg::Path SmacPlannerLattice::createPlanImpl(
++  const geometry_msgs::msg::PoseStamped & start,
++  const geometry_msgs::msg::PoseStamped & goal, bool prefer_traveled, bool * used_corridor)
++{
+   steady_clock::time_point a = steady_clock::now();
+ 
+   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(_costmap->getMutex()));
+@@ -260,6 +301,26 @@
+   const double circumscribed_cost = findCircumscribedCost(_costmap_ros);
+   lock.unlock();
+   auto * _costmap = _planning_costmap.get();
++  TraveledCorridor::FrameTransform history_transform;
++  const TraveledCorridor::FrameTransform * transform = nullptr;
++  const auto history_frame = _traveled_corridor.frame();
++  if (prefer_traveled && !history_frame.empty() && history_frame != _global_frame && _travel_tf) {
++    try {
++      const auto tf = _travel_tf->lookupTransform(_global_frame, history_frame, tf2::TimePointZero);
++      history_transform = {history_frame, _global_frame, tf.transform.translation.x,
++        tf.transform.translation.y, tf2::getYaw(tf.transform.rotation)};
++      transform = &history_transform;
++    } catch (const tf2::TransformException & error) {
++      RCLCPP_WARN(_logger, "Travel history transform unavailable: %s", error.what());
++    }
++  }
++  const bool traveled_return = prefer_traveled && _traveled_corridor.applyReturnMask(
++    *_costmap, goal.pose.position.x, goal.pose.position.y, _global_frame,
++    _traveled_radius, _revisit_distance, _revisit_minimum_travel, transform);
++  if (used_corridor) *used_corridor = traveled_return;
++  if (traveled_return) {
++    RCLCPP_INFO(_logger, "Planning return through estimated traveled corridor");
++  }
+   _collision_checker.setCostmap(_costmap);
+   _collision_checker.setFootprint(footprint, use_radius, circumscribed_cost);
+   _collision_checker.cacheCollisionBounds();

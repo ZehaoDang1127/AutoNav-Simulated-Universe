@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "obstacle",
+  "width_m": 14,
+  "height_m": 10,
+  "spawn": [2, 5, 0],
+  "goals": [[12, 5]],
+  "obstacles": [[7, 5, 0.7]],
+  "max_time_s": 55
+}

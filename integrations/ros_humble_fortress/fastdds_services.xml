@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <!-- Humble waits this long for a client's reply reader to be discovered.
+       The default 100 ms can expire after accepting an action request.
+       Apply only to service replies; keep ordinary topic settings intact. -->
+  <publisher profile_name="service">
+    <qos>
+      <reliability>
+        <kind>RELIABLE</kind>
+        <max_blocking_time><sec>5</sec><nanosec>0</nanosec></max_blocking_time>
+      </reliability>
+    </qos>
+  </publisher>
+</profiles>

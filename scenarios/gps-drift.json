@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "gps-drift",
+  "width_m": 15,
+  "height_m": 8,
+  "spawn": [2, 4, 0],
+  "goals": [[12, 4]],
+  "track": "gps-only",
+  "sensors": ["odometry", "gps"],
+  "odom_linear_scale": 1.04,
+  "arrival_radius_m": 1.0,
+  "max_time_s": 50
+}

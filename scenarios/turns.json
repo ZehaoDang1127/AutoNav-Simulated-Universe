@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "turns",
+  "width_m": 14,
+  "height_m": 12,
+  "spawn": [2, 3, 0],
+  "goals": [[8, 3], [8, 9], [3, 9]],
+  "max_time_s": 75
+}

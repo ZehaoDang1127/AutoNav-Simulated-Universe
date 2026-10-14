@@ -2,6 +2,13 @@
 .venv/
 **/.venv/
 
+# Local build and simulation outputs
+runs/
+build/
+dist/
+tmp/
+*.egg-info/
+
 # Python bytecode
 __pycache__/
 *.pyc

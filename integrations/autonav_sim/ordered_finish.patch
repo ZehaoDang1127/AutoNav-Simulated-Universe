@@ -1,0 +1,15 @@
+--- a/igvc_competition_sim/igvc_competition_sim/course_monitor.py
++++ b/igvc_competition_sim/igvc_competition_sim/course_monitor.py
+@@ -349,7 +349,11 @@
+             if distance_to_finish > radius + self.finish_reentry_margin_m:
+                 self.finish_armed = True
+             return
+-        if distance_to_finish <= radius:
++        # An overlapping finish circle must not freeze scoring before the
++        # final ordered waypoint is reached. Keep contact and speed checks
++        # active throughout that approach, using the original scored radii.
++        if (distance_to_finish <= radius
++                and self.next_waypoint_index >= len(self.course.mission_waypoints)):
+             self.finish_reached = True
+ 
+     def _waypoint_reference_position(

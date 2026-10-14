@@ -1,0 +1,97 @@
+--- a/isaac_ros-dev/src/line_layer/include/line_layer/line_layer.hpp
++++ b/isaac_ros-dev/src/line_layer/include/line_layer/line_layer.hpp
+@@ -121,6 +121,8 @@
+   std::atomic<bool> need_recalculation_;
+   bool rolling_window_;
+   bool publish_costmap_;
++  bool preserve_unknown_space_{false};
++  std::string clearing_frame_;
+   // If true (default, used by local costmap), resetMaps() runs every cycle and the layer reflects only the current message. If false (used in the global costmap), resetMaps() is skipped so cells accumulate forever — required for global obstacle memory when map_padder maintains a stable-sized grid.
+   bool clearing_;
+   double transform_tolerance_;
+--- a/isaac_ros-dev/src/line_layer/src/line_layer.cpp
++++ b/isaac_ros-dev/src/line_layer/src/line_layer.cpp
+@@ -46,6 +46,7 @@
+ #include "nav2_costmap_2d/footprint.hpp"
+ #include "rclcpp/parameter_events_filter.hpp"
+ #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
++#include "tf2/utils.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -121,6 +122,8 @@
+   declareParameter("costmap_topic", rclcpp::ParameterValue("/line_costmap"));
+   declareParameter("rolling_window", rclcpp::ParameterValue(false));
+   declareParameter("publish_costmap", rclcpp::ParameterValue(false));
++  declareParameter("preserve_unknown_space", rclcpp::ParameterValue(false));
++  declareParameter("clearing_frame", rclcpp::ParameterValue(std::string("")));
+   declareParameter("clearing", rclcpp::ParameterValue(true));
+   declareParameter("transform_tolerance", rclcpp::ParameterValue(0.2));
+   declareParameter("max_message_age_ms", rclcpp::ParameterValue(750));
+@@ -142,6 +145,8 @@
+   node->get_parameter(name_ + "." + "costmap_topic", costmap_topic_);
+   node->get_parameter(name_ + "." + "rolling_window", rolling_window_);
+   node->get_parameter(name_ + "." + "publish_costmap", publish_costmap_);
++  node->get_parameter(name_ + "." + "preserve_unknown_space", preserve_unknown_space_);
++  node->get_parameter(name_ + "." + "clearing_frame", clearing_frame_);
+   node->get_parameter(name_ + "." + "clearing", clearing_);
+   node->get_parameter(name_ + "." + "transform_tolerance", transform_tolerance_);
+   node->get_parameter(name_ + "." + "max_message_age_ms", max_message_age_ms_);
+@@ -199,7 +204,7 @@
+   }
+ 
+   
+-  setDefaultValue(FREE_SPACE);
++  setDefaultValue(preserve_unknown_space_ ? NO_INFORMATION : FREE_SPACE);
+ 
+   matchSize();
+ 
+@@ -438,6 +443,21 @@
+     robot_y = latest_robot_y_;
+     robot_yaw = latest_robot_yaw_;
+     have_pose = have_robot_pose_;
++  }
++
++  if (clear_lines_only_in_view_ && !clearing_frame_.empty()) {
++    try {
++      const auto sensor = tf_buffer_->lookupTransform(
++        layered_costmap_->getGlobalFrameID(), clearing_frame_,
++        rclcpp::Time(0, 0, now.get_clock_type()),
++        rclcpp::Duration::from_seconds(transform_tolerance_));
++      robot_x = sensor.transform.translation.x;
++      robot_y = sensor.transform.translation.y;
++      robot_yaw = tf2::getYaw(sensor.transform.rotation);
++      have_pose = true;
++    } catch (const tf2::TransformException &) {
++      have_pose = false; // Missing sensor pose cannot authorize clearing.
++    }
+   }
+ 
+   std::lock_guard<std::mutex> lock(persisted_points_mutex_);
+@@ -517,7 +537,7 @@
+   // geometry. After this call, costmap_ is freshly zeroed -- every
+   // line cell we previously stamped is gone.
+   nav2_costmap_2d::CostmapLayer::matchSize();
+-  setDefaultValue(FREE_SPACE);
++  setDefaultValue(preserve_unknown_space_ ? NO_INFORMATION : FREE_SPACE);
+   resetMaps();
+ 
+   // persisted_points_ stores every observed line in world (map-frame)
+@@ -554,7 +574,7 @@
+         continue;
+       }
+       const int idx = ny * size_x_int + nx;
+-      if (costmap_[idx] < off.cost) {
++      if (costmap_[idx] == NO_INFORMATION || costmap_[idx] < off.cost) {
+         costmap_[idx] = off.cost;
+       }
+     }
+@@ -603,7 +623,7 @@
+         continue;
+       }
+       const int idx = ny * size_x_int + nx;
+-      if (costmap_[idx] < off.cost) {
++      if (costmap_[idx] == NO_INFORMATION || costmap_[idx] < off.cost) {
+         costmap_[idx] = off.cost;
+       }
+     }

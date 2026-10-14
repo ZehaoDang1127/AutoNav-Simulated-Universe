@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>autonav_filled_cost_critic</name>
+  <version>0.1.0</version>
+  <description>Filled-body MPPI cost critic sharing the pinned Smac collision rules.</description>
+  <maintainer email="autonav@example.invalid">AutoNav</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>nav2_mppi_controller</depend>
+  <depend>nav2_smac_planner</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>pluginlib</depend>
+  <depend>xtensor</depend>
+  <depend>xsimd</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

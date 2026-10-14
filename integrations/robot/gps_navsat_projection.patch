@@ -1,0 +1,92 @@
+--- a/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
++++ b/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
+@@ -67,6 +67,7 @@
+ from sensor_msgs.msg import NavSatFix
+ from std_msgs.msg import Float64, String
+ from builtin_interfaces.msg import Duration
++from robot_localization.srv import FromLL
+ from visualization_msgs.msg import Marker
+ 
+ import tf2_ros
+@@ -462,6 +463,9 @@
+     preempt_requested: bool = False
+     preempt_done: Optional[threading.Event] = None
+ 
++    projected_goal_future: Optional[object] = None
++    projected_goal_map: Optional[Tuple[float, float]] = None
++
+     def __post_init__(self) -> None:
+         if self.preempt_done is None:
+             self.preempt_done = threading.Event()
+@@ -475,6 +479,10 @@
+ 
+     def __init__(self) -> None:
+         super().__init__("gps_handler_node")
++        self.declare_parameter("use_navsat_projection", False)
++        self._use_navsat_projection = bool(
++            self.get_parameter("use_navsat_projection").value)
++        self._navsat_client = self.create_client(FromLL, "/fromLL")
+ 
+         # ── Parameters ──────────────────────────────────────────────
+         self.declare_parameter("success_radius_m", SUCCESS_RADIUS_M)
+@@ -1839,6 +1847,40 @@
+                 self._active.last_published_goal_map = (gx_map, gy_map)
+                 self._active.last_published_t_s = now_pub_s
+ 
++    def _publish_projected_gps_goal(self, active: "_ActiveGoal") -> None:
++        """Share the global GPS estimator's datum instead of re-estimating it.
++
++        The projection is asynchronous and cached per active waypoint. Waiting
++        for its service never falls back to a drifting world-to-odom target.
++        """
++        with self._lock:
++            if self._active is not active or self._publisher_disabled:
++                return
++            if active.projected_goal_map is None:
++                if active.projected_goal_future is None:
++                    if not self._navsat_client.service_is_ready():
++                        return
++                    request = FromLL.Request()
++                    request.ll_point.latitude, request.ll_point.longitude = active.goal_lat_lon
++                    active.projected_goal_future = self._navsat_client.call_async(request)
++                if not active.projected_goal_future.done():
++                    return
++                try:
++                    point = active.projected_goal_future.result().map_point
++                    if not (math.isfinite(point.x) and math.isfinite(point.y)):
++                        raise ValueError("nonfinite GPS map projection")
++                    active.projected_goal_map = (point.x, point.y)
++                except Exception as exc:
++                    active.projected_goal_future = None
++                    self.get_logger().warn(f"GPS map projection failed: {exc}")
++                    return
++            goal_map = active.projected_goal_map
++        self._publish_local_map_goal(active, goal_map)
++        with self._lock:
++            if self._active is active:
++                # GPS diagnostics keep their native world-frame target.
++                active.last_published_goal_world = active.goal_world_xy
++
+     def _publisher_tick(self) -> None:
+         if self._active is None or self._publisher_disabled:
+             return
+@@ -1870,6 +1912,9 @@
+         # required (we already are in map). Manifest §4.3 routing rule.
+         if active.goal_type == NavigateToWaypoint.Goal.GOAL_TYPE_LOCAL:
+             self._publish_local_map_goal(active, goal_world_xy)
++            return
++        if self._use_navsat_projection:
++            self._publish_projected_gps_goal(active)
+             return
+         # ── GPS goal: existing world→odom→map pipeline ───────────────
+ 
+--- a/isaac_ros-dev/src/gps_waypoint_handler/package.xml
++++ b/isaac_ros-dev/src/gps_waypoint_handler/package.xml
+@@ -12,6 +12,7 @@
+   <exec_depend>nav2_msgs</exec_depend>
+   <exec_depend>nav_msgs</exec_depend>
+   <exec_depend>sensor_msgs</exec_depend>
++  <exec_depend>robot_localization</exec_depend>
+   <exec_depend>std_msgs</exec_depend>
+   <exec_depend>visualization_msgs</exec_depend>
+   <exec_depend>tf2_ros</exec_depend>

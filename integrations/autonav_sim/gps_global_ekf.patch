@@ -1,0 +1,111 @@
+diff --git a/igvc_competition_sim/launch/igvc_competition.launch.py b/igvc_competition_sim/launch/igvc_competition.launch.py
+--- a/igvc_competition_sim/launch/igvc_competition.launch.py
++++ b/igvc_competition_sim/launch/igvc_competition.launch.py
+@@ -334,6 +334,27 @@
+     ]
+ 
+ 
++def _gps_ekf_process(context, *args, **kwargs):
++    if not _truthy(context, "launch_gps_ekf"):
++        return []
++    if not _truthy(context, "launch_local_ekf"):
++        raise ValueError("launch_gps_ekf requires launch_local_ekf")
++    config = os.path.join(_package_share("igvc_competition_sim"), "config")
++    return [
++        Node(package="robot_localization", executable="ekf_node", name="global_ekf",
++             output="screen", parameters=[os.path.join(config, "global_sensor_ekf.yaml"),
++                                           {"use_sim_time": True}],
++             remappings=[("odometry/filtered", "/global_ekf/odom")]),
++        Node(package="robot_localization", executable="navsat_transform_node",
++             name="navsat_transform", output="screen",
++             parameters=[os.path.join(config, "navsat_sensor.yaml"),
++                         {"use_sim_time": True}],
++             remappings=[("gps/fix", "/gps_fix"),
++                         ("odometry/filtered", "/global_ekf/odom"),
++                         ("odometry/gps", "/odometry/gps")]),
++    ]
++
++
+ def _camera_bridge_process(context, *args, **kwargs):
+     if not _truthy(context, "launch_camera_bridge"):
+         return []
+@@ -425,6 +446,7 @@
+             output="screen",
+             parameters=[{
+                 "use_sim_time": True,
++                "publish_map_odom_tf": not _truthy(context, "launch_gps_ekf"),
+                 "max_relay_rate_hz": ParameterValue(
+                     LaunchConfiguration("odom_bridge_rate_hz"),
+                     value_type=float,
+@@ -619,6 +641,7 @@
+         DeclareLaunchArgument("world", default_value=_default_world()),
+         DeclareLaunchArgument("validate_world_sync", default_value="true"),
+         DeclareLaunchArgument("run_id", default_value=""),
++        DeclareLaunchArgument("launch_gps_ekf", default_value="false"),
+         DeclareLaunchArgument("launch_gazebo", default_value="true"),
+         DeclareLaunchArgument("gazebo_server_only", default_value="true"),
+         DeclareLaunchArgument("launch_bridge", default_value="true"),
+@@ -698,6 +721,7 @@
+         OpaqueFunction(function=_harness_process),
+         monitor,
+         OpaqueFunction(function=_detection_process),
++        OpaqueFunction(function=_gps_ekf_process),
+         pca_scan,
+         pca_scan_clear,
+         gps_handler,
+diff --git a/igvc_competition_sim/setup.py b/igvc_competition_sim/setup.py
+--- a/igvc_competition_sim/setup.py
++++ b/igvc_competition_sim/setup.py
+@@ -21,6 +21,8 @@
+              "config/dynamics_replay_profiles.yaml",
+              "config/fastdds_jetson_robot.xml",
+              "config/fastdds_jetson_sim_vm.xml",
++             "config/global_sensor_ekf.yaml",
++             "config/navsat_sensor.yaml",
+          ]),
+         ("share/" + package_name + "/launch",
+          ["launch/igvc_competition.launch.py"]),
+diff --git a/igvc_competition_sim/config/global_sensor_ekf.yaml b/igvc_competition_sim/config/global_sensor_ekf.yaml
+new file mode 100644
+--- /dev/null
++++ b/igvc_competition_sim/config/global_sensor_ekf.yaml
+@@ -0,0 +1,21 @@
++global_ekf:
++  ros__parameters:
++    frequency: 30.0
++    sensor_timeout: 0.3
++    two_d_mode: true
++    publish_tf: true
++    map_frame: map
++    odom_frame: odom
++    base_link_frame: base_link
++    world_frame: map
++    odom0: /local_ekf/odom
++    # Continuous gyro heading/body velocity; no integrated wheel position.
++    odom0_config: [false, false, false, false, false, true,
++                   true, true, false, false, false, true,
++                   false, false, false]
++    odom0_queue_size: 10
++    odom1: /odometry/gps
++    odom1_config: [true, true, false, false, false, false,
++                   false, false, false, false, false, false,
++                   false, false, false]
++    odom1_queue_size: 10
+diff --git a/igvc_competition_sim/config/navsat_sensor.yaml b/igvc_competition_sim/config/navsat_sensor.yaml
+new file mode 100644
+--- /dev/null
++++ b/igvc_competition_sim/config/navsat_sensor.yaml
+@@ -0,0 +1,13 @@
++navsat_transform:
++  ros__parameters:
++    frequency: 10.0
++    delay: 0.3
++    zero_altitude: true
++    # The exported course starts with the robot facing map east (yaw zero).
++    # Gyro-integrated odometry preserves that initial heading convention.
++    use_odometry_yaw: true
++    yaw_offset: 0.0
++    magnetic_declination_radians: 0.0
++    wait_for_datum: false
++    broadcast_utm_transform: false
++    publish_filtered_gps: false

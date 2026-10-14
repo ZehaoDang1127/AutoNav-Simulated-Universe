@@ -1,0 +1,13 @@
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -514,8 +514,9 @@
+             // local mark has disappeared. Forget that stale hard mark in
+             // the observed front cone so global inflation can rebuild
+             // from the remaining actual obstacle cells.
+             if (allow_decrease_ && costmap_[idx] != NO_INFORMATION &&
+-              decreaseAllowedAt(wx, wy, robot_x, robot_y, robot_yaw, have_pose))
++              (decrease_nonzero_outside_view_ ||
++              decreaseAllowedAt(wx, wy, robot_x, robot_y, robot_yaw, have_pose)))
+             {
+               costmap_[idx] = NO_INFORMATION;
+             }

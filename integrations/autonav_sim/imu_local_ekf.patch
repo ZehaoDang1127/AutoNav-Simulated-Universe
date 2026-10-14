@@ -1,0 +1,239 @@
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -4,6 +4,7 @@
+ import math
+ import random
+ import sys
++import threading
+ 
+ from .course import Course, load_course, local_to_latlon
+ from .lidar_geometry import raycast_cylinders
+@@ -21,6 +22,7 @@
+     from geometry_msgs.msg import TransformStamped, Twist, Vector3
+     from nav_msgs.msg import OccupancyGrid, Odometry
+     from sensor_msgs.msg import (
++        Imu,
+         JointState,
+         LaserScan,
+         NavSatFix,
+@@ -207,6 +209,12 @@
+             if bool(self.get_parameter("publish_ground_truth_odom").value)
+             else None
+         )
++        self.imu_pub = self.create_publisher(Imu, "/imu/data", sensor_qos)
++        self._imu_lock = threading.RLock()
++        self._imu_physics_yaw = None
++        self._imu_physics_stamp = None
++        self._imu_previous_yaw = None
++        self._imu_previous_s = None
+         self.gps_pub = self.create_publisher(NavSatFix, "/gps_fix", sensor_qos)
+         self.joint_pub = self.create_publisher(JointState, "/joint_states", 10)
+         self.autonomous_pub = self.create_publisher(
+@@ -339,6 +347,12 @@
+                 self.base_x = float(t.x)
+                 self.base_y = float(t.y)
+                 self.heading = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
++                with self._imu_lock:
++                    self._imu_physics_yaw = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
++                    self._imu_physics_stamp = tf.header.stamp
++                    if _stamp_to_float(self._imu_physics_stamp) <= 0.0:
++                        self._imu_physics_stamp = self.get_clock().now().to_msg()
++                    self._publish_imu(self._imu_physics_stamp)
+                 self.last_true_pose_s = _stamp_to_float(
+                     self.get_clock().now().to_msg())
+                 self.received_true_pose = True
+@@ -366,6 +380,7 @@
+             self._publish_odom(stamp)
+ 
+     def _step_and_publish_odom(self) -> None:
++        self._publish_imu(self.get_clock().now().to_msg())
+         stamp = self.get_clock().now().to_msg()
+         now_s = _stamp_to_float(stamp)
+         if self.last_step_s is None:
+@@ -464,6 +479,54 @@
+         msg.transform.rotation.z = float(qz)
+         msg.transform.rotation.w = float(qw)
+         return msg
++
++    def _publish_imu(self, stamp: Time) -> None:
++        # Physics and odom timer callbacks may execute concurrently.
++        with self._imu_lock:
++            IgvcSensorHarness._publish_imu_locked(self, stamp)
++
++    def _publish_imu_locked(self, stamp: Time) -> None:
++        # Synthetic gyro, like the synthetic GPS/LiDAR: sample actual physics
++        # motion. Publish angular velocity only, never ground-truth position
++        # or absolute yaw to the estimator.
++        if self._imu_physics_yaw is None:
++            return
++        # Differentiate on physics timestamps, not timer receipt times. A
++        # held pose otherwise generates alternating zero/rate-spike samples.
++        sample_stamp = self._imu_physics_stamp
++        if sample_stamp is None:
++            return
++        sample_s = _stamp_to_float(sample_stamp)
++        yaw = self._imu_physics_yaw
++        rate = 0.0
++        if self._imu_previous_s is not None and sample_s <= self._imu_previous_s:
++            if _stamp_to_float(stamp) - sample_s <= 0.10:
++                return
++            # Gazebo omits unchanged dynamic poses. Supply a stationary gyro
++            # heartbeat after that feed becomes quiet. Its held yaw is
++            # also the finite-difference reference at this newer time;
++            # otherwise resuming motion averages a turn over the whole
++            # stopped interval and silently loses accumulated heading.
++            sample_stamp = stamp
++            self._imu_previous_s = _stamp_to_float(stamp)
++        else:
++            if self._imu_previous_s is not None:
++                dt = sample_s - self._imu_previous_s
++                delta = math.atan2(math.sin(yaw - self._imu_previous_yaw),
++                                   math.cos(yaw - self._imu_previous_yaw))
++                rate = delta / dt
++            self._imu_previous_s = sample_s
++            self._imu_previous_yaw = yaw
++        msg = Imu()
++        msg.header.stamp = sample_stamp
++        msg.header.frame_id = "base_link"
++        msg.orientation_covariance[0] = -1.0
++        msg.angular_velocity.z = rate + random.gauss(0.0, 0.005)
++        msg.angular_velocity_covariance = [0.0001, 0.0, 0.0,
++                                           0.0, 0.0001, 0.0,
++                                           0.0, 0.0, 0.0001]
++        msg.linear_acceleration_covariance[0] = -1.0
++        self.imu_pub.publish(msg)
+ 
+     def _publish_odom(self, stamp: Time) -> None:
+         qx, qy, qz, qw = _yaw_quaternion(self.heading)
+--- a/igvc_competition_sim/igvc_competition_sim/odom_bridge.py
++++ b/igvc_competition_sim/igvc_competition_sim/odom_bridge.py
+@@ -32,6 +32,10 @@
+             "ground_truth_odom_topic", "/igvc_sim/ground_truth_odom")
+         self.declare_parameter("publish_ground_truth_odom", True)
+         self.declare_parameter("publish_map_odom_tf", True)
++        self.declare_parameter("publish_odom_tf", True)
++        self.declare_parameter("publish_local_odom", True)
++        self.publish_odom_tf = bool(self.get_parameter("publish_odom_tf").value)
++        self.publish_local_odom = bool(self.get_parameter("publish_local_odom").value)
+         self.declare_parameter("max_relay_rate_hz", 30.0)
+ 
+         self.publish_map_odom_tf = bool(
+@@ -94,8 +98,13 @@
+         odom_msg.header.stamp = stamp
+         odom_msg.header.frame_id = "odom"
+         odom_msg.child_frame_id = "base_link"
++        # The local EKF uses body velocity, not slip-biased wheel pose/yaw.
++        odom_msg.twist.covariance[0] = 0.01
++        odom_msg.twist.covariance[7] = 0.01
++        odom_msg.twist.covariance[35] = 0.04
+         self.odom_pub.publish(odom_msg)
+-        self.local_odom_pub.publish(odom_msg)
++        if self.publish_local_odom:
++            self.local_odom_pub.publish(odom_msg)
+         if self.ground_truth_pub is not None:
+             self.ground_truth_pub.publish(odom_msg)
+ 
+@@ -116,7 +125,8 @@
+         odom_base.transform.translation.y = msg.pose.pose.position.y
+         odom_base.transform.translation.z = msg.pose.pose.position.z
+         odom_base.transform.rotation = msg.pose.pose.orientation
+-        transforms.append(odom_base)
++        if self.publish_odom_tf:
++            transforms.append(odom_base)
+         self.tf_pub.sendTransform(transforms)
+ 
+ 
+--- a/igvc_competition_sim/launch/igvc_competition.launch.py
++++ b/igvc_competition_sim/launch/igvc_competition.launch.py
+@@ -430,6 +430,8 @@
+                     value_type=float,
+                 ),
+                 "input_odom_topic": _active_robot_profile(context).gz_odom_topic,
++                "publish_odom_tf": not _truthy(context, "launch_local_ekf"),
++                "publish_local_odom": not _truthy(context, "launch_local_ekf"),
+                 # When the harness publishes the TRUE ground-truth pose it owns
+                 # /igvc_sim/ground_truth_odom; the bridge must not also publish a
+                 # dead-reckoned copy (two publishers => monitor/nav get a mix).
+@@ -438,6 +440,19 @@
+             }],
+         )
+     ]
++
++
++def _local_ekf_process(context, *args, **kwargs):
++    if not _truthy(context, "launch_local_ekf"):
++        return []
++    return [Node(
++        package="robot_localization", executable="ekf_node", name="ekf_node",
++        output="screen",
++        parameters=[os.path.join(_package_share("igvc_competition_sim"),
++                                 "config", "local_sensor_ekf.yaml"),
++                    {"use_sim_time": True}],
++        remappings=[("odometry/filtered", "/local_ekf/odom")],
++    )]
+ 
+ 
+ def _bridge_process(context, *args, **kwargs):
+@@ -610,6 +625,7 @@
+         DeclareLaunchArgument("launch_camera_bridge", default_value="true"),
+         DeclareLaunchArgument("launch_harness", default_value="true"),
+         DeclareLaunchArgument("launch_odom_bridge", default_value="true"),
++        DeclareLaunchArgument("launch_local_ekf", default_value="false"),
+         DeclareLaunchArgument("odom_bridge_rate_hz", default_value="30.0"),
+         DeclareLaunchArgument("publish_harness_odom_tf", default_value="false"),
+         DeclareLaunchArgument("launch_dynamics", default_value="true"),
+@@ -677,6 +693,7 @@
+         OpaqueFunction(function=_calibrated_dynamics_process),
+         OpaqueFunction(function=_camera_bridge_process),
+         OpaqueFunction(function=_odom_bridge_process),
++        OpaqueFunction(function=_local_ekf_process),
+         OpaqueFunction(function=_robot_state_publisher),
+         OpaqueFunction(function=_harness_process),
+         monitor,
+--- /dev/null
++++ b/igvc_competition_sim/config/local_sensor_ekf.yaml
+@@ -0,0 +1,24 @@
++ekf_node:
++  ros__parameters:
++    frequency: 50.0
++    sensor_timeout: 0.3
++    two_d_mode: true
++    publish_tf: true
++    map_frame: map
++    odom_frame: odom
++    base_link_frame: base_link
++    world_frame: odom
++    odom0: /odom
++    # Wheel body velocity and the nonholonomic lateral constraint.
++    # Wheel-integrated position/yaw and wheel yaw rate are deliberately unused.
++    odom0_config: [false, false, false, false, false, false,
++                   true, true, false, false, false, false,
++                   false, false, false]
++    odom0_queue_size: 10
++    imu0: /imu/data
++    # Gyroscope yaw rate only: no absolute physics orientation or position.
++    imu0_config: [false, false, false, false, false, false,
++                  false, false, false, false, false, true,
++                  false, false, false]
++    imu0_queue_size: 10
++    imu0_remove_gravitational_acceleration: false
+--- a/igvc_competition_sim/setup.py
++++ b/igvc_competition_sim/setup.py
+@@ -16,6 +16,7 @@
+         ("share/" + package_name + "/config",
+          [
+              "config/igvc_competition_compact.yaml",
++             "config/local_sensor_ekf.yaml",
+              "config/dynamics_calibration.yaml",
+              "config/dynamics_replay_profiles.yaml",
+              "config/fastdds_jetson_robot.xml",
+--- a/igvc_competition_sim/package.xml
++++ b/igvc_competition_sim/package.xml
+@@ -17,6 +17,7 @@
+   <exec_depend>nav2_bringup</exec_depend>
+   <exec_depend>pointcloud_to_laserscan</exec_depend>
+   <exec_depend>rclpy</exec_depend>
++  <exec_depend>robot_localization</exec_depend>
+   <exec_depend>robot_state_publisher</exec_depend>
+   <exec_depend>ros_gz_bridge</exec_depend>
+   <exec_depend>ros_gz_sim</exec_depend>

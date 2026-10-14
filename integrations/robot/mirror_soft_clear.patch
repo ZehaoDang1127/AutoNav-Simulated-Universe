@@ -1,0 +1,22 @@
+diff --git a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+index ff90ca3..0b56392 100644
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -501,6 +501,17 @@ void LocalMirrorLayer::updateCosts(
+             continue;
+           }
+           if (src_val > 0 && src_val < min_occupied_value_to_mirror_) {
++            // A soft local inflation cell is not a new obstacle mark.
++            // It is, however, positive evidence that a previously lethal
++            // local mark has disappeared. Forget that stale hard mark in
++            // the observed front cone so global inflation can rebuild
++            // from the remaining actual obstacle cells.
++            if (allow_decrease_ && costmap_[idx] != NO_INFORMATION &&
++              (decrease_nonzero_outside_view_ ||
++              decreaseAllowedAt(wx, wy, robot_x, robot_y, robot_yaw, have_pose)))
++            {
++              costmap_[idx] = NO_INFORMATION;
++            }
+             continue;
+           }
+           const unsigned char incoming = interpretCost(src_val);

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "planner-ramp",
+  "width_m": 16,
+  "height_m": 8,
+  "spawn": [
+    2,
+    4,
+    0
+  ],
+  "goals": [
+    [
+      13,
+      4
+    ]
+  ],
+  "ramps": [
+    [
+      5,
+      8,
+      2,
+      6,
+      15
+    ]
+  ],
+  "grade_limit_percent": 20,
+  "max_time_s": 45,
+  "track": "planner-controller"
+}

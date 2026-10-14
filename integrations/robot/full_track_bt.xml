@@ -1,0 +1,166 @@
+<!--
+  AutoNav behavior tree — persistent reversible goal pursuit and
+  breadcrumb-reverse stuck-extraction.
+
+  Flow:
+    1. Refresh the real mission goal via GoalUpdater.
+    2. Compute a reversible path to that goal (replan at 3 Hz).
+    3. Validate the swept body and execute the accepted route with MPPI.
+    4. If everything stalls, cycle through recoveries forever.
+
+  Recovery sequence:
+    1. BackUp           — reverse out of tight spots
+    2. GradientEscape   — follow costmap gradient away from high cost
+    3. Clear costmaps   — remove ghost obstacles
+    4. Wait 1 s         — let transient obstacles pass
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="999" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <!-- Replan at 3 Hz. The standard Nav2 approach to "what if the
+             path becomes invalid?" is just to replan often enough that
+             a fresh path naturally replaces a stale one within one
+             cycle. 3 Hz matches the global costmap update cadence and
+             gives a ~333 ms worst-case staleness window at the planner,
+             without the false-positive issues of an explicit
+             IsPathValid check (which can fail-cascade into recovery on
+             a transient one-tick costmap blip). PathFootprintSafe below
+             densely validates planner outputs against the rectangular
+             base_link footprint before FollowPath can execute them. Lethal
+             cells are forbidden throughout the footprint; the inscribed
+             band is checked at the robot center so Nav2's inflation is not
+             counted twice. -->
+        <RateController hz="3.0">
+          <!--
+            GoalUpdater intercepts in-mission goal corrections from
+            gps_handler_node. It subscribes to /goal_update; each tick
+            it copies input_goal -> output_goal, but if a fresh
+            /goal_update message has arrived since the last tick the
+            output_goal is rewritten in place WITHOUT canceling the
+            FollowPath action below.
+
+            This is what keeps the controller running between
+            gps_handler's 1 Hz goal refreshes. Previously every fresh
+            /goal_pose re-issued NavigateToPose, which canceled the
+            in-flight FollowPath, briefly halting the robot until the
+            new global path was ready (the stop/go observed during
+            mission runs). With GoalUpdater, in-mission corrections
+            flow through {live_goal}, the planner re-runs at 3 Hz on
+            the new goal, and FollowPath keeps emitting cmd_vel
+            uninterrupted as it consumes the next {path} the planner
+            writes.
+          -->
+          <GoalUpdater input_goal="{goal}" output_goal="{live_goal}">
+            <Sequence name="PlanMissionGoal">
+              <!-- Keep bounded retries for transient map changes. A fresh
+                   candidate can be used immediately after it passes validation;
+                   fixed one-second pauses consumed the strict speed interval.
+                   Repeated search failures still escalate to recovery. -->
+              <RecoveryNode number_of_retries="8" name="ComputePathRecovery">
+                <Sequence name="ComputeAndValidateSweptFootprint">
+                  <ComputePathToPose goal="{live_goal}" path="{candidate_path}" planner_id="GridBased"/>
+                  <!-- Publish to {path} only after the candidate passes. -->
+                  <PathFootprintSafe path="{candidate_path}" validated_path="{path}"
+                    costmap_topic="/global_costmap/costmap_raw" global_frame="odom"
+                    robot_base_frame="base_link" footprint="[[0.77, 0.41], [0.77, -0.41], [-0.32, -0.41], [-0.32, 0.41]]"
+                    footprint_padding="0.10"
+                    lethal_threshold="254"
+                    inscribed_threshold="253"
+                    max_pose_step_m="0.05"
+                    max_yaw_step_rad="0.10"
+                    max_costmap_age_ms="1500"/>
+                </Sequence>
+                <Sequence name="PlanRecovery">
+                  <!-- LOCAL clear only (sim spec): wiping the entire
+                       global costmap erases distant lidar marks the
+                       robot needs to re-find its way back, and the
+                       planner immediately draws a straight line through
+                       the now-empty space. A 1 m around-robot clear
+                       handles the transient-inflation case without that
+                       memory loss. -->
+                  <ClearCostmapAroundRobot name="ClearAroundRobot-PlanRecovery"
+                    service_name="local_costmap/clear_around_local_costmap"
+                    reset_distance="1.0"/>
+                  <!-- Humble accepts zero integer seconds. Retry promptly
+                       after the clear; every candidate still needs validation. -->
+                  <Wait server_name="wait_plan" wait_duration="0"/>
+                </Sequence>
+              </RecoveryNode>
+            </Sequence>
+          </GoalUpdater>
+        </RateController>
+        <!-- Controller-first dispatch. The custom forward/reverse gate was
+             false-positiveing on valid forward plans, so clear paths showed
+             in RViz while FollowPath never ran. Planner output is already
+             reversible (Smac and MPPI both allow reverse), so MPPI gets the
+             first chance to execute every valid plan. -->
+        <RecoveryNode number_of_retries="32" name="FollowPathRecovery">
+          <!-- Keep planner updates fast, but do not replace the
+               FollowPath action for every same-corridor 3 Hz replan.
+               PathSignificantlyChanged compares route geometry across
+               the full path and also forces a bounded periodic refresh,
+               so real tape/cone route changes still reach MPPI while
+               identical path refreshes do not churn the action server.
+               Keep a shorter remaining route when a replan only lengthens
+               the detour. The fresh guards below can halt it immediately;
+               recovery then admits the necessary replacement. -->
+          <PathSignificantlyChanged path="{path}" goal="{live_goal}" filtered_path="{controller_path}">
+            <!-- Recheck the measured body and near controller route on every
+                 tick. New candidates still pass whole-path validation above.
+                 The global 2 m horizon covers four seconds at maximum speed;
+                 distant map updates allow replanning while safe motion continues.
+                 The local 1.5 m gate covers the full 1.4 m MPPI rollout.
+                 ReactiveSequence halts FollowPath immediately on rejection,
+                 including while the planner branch is in recovery. -->
+            <ReactiveSequence name="ValidateActiveControllerPath">
+              <PathFootprintSafe path="{controller_path}"
+                costmap_topic="/global_costmap/costmap_raw" global_frame="odom"
+                validate_remaining="true" validation_distance_m="2.0"
+                robot_base_frame="base_link" footprint="[[0.77, 0.41], [0.77, -0.41], [-0.32, -0.41], [-0.32, 0.41]]"
+                footprint_padding="0.10"
+                lethal_threshold="254" inscribed_threshold="253"
+                max_pose_step_m="0.05" max_yaw_step_rad="0.10"
+                max_costmap_age_ms="1500"/>
+              <PathFootprintSafe path="{controller_path}"
+                costmap_topic="/local_costmap/costmap_raw" global_frame="odom"
+                validate_remaining="true" validation_distance_m="1.5"
+                robot_base_frame="base_link" footprint="[[0.77, 0.41], [0.77, -0.41], [-0.32, -0.41], [-0.32, 0.41]]"
+                footprint_padding="0.10"
+                lethal_threshold="254" inscribed_threshold="253"
+                max_pose_step_m="0.05" max_yaw_step_rad="0.10"
+                max_costmap_age_ms="750"/>
+              <FollowPath path="{controller_path}" controller_id="FollowPath"/>
+            </ReactiveSequence>
+          </PathSignificantlyChanged>
+          <Sequence name="FollowPathRetryPauseThenClear">
+            <!-- Guards retain the stop until a safe route is available.
+                 A fixed one-second wait after each rejection consumed the
+                 strict speed interval even when replanning had succeeded. -->
+            <Wait server_name="wait_controller" wait_duration="0"/>
+            <ClearCostmapAroundRobot name="ClearAroundRobot-Context"
+              service_name="local_costmap/clear_around_local_costmap"
+              reset_distance="1.0"/>
+          </Sequence>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Wait wait_duration="1"/>
+          <!-- LOCAL-only clear in the recovery dance. Global wipe was
+               removed per sim spec: the global costmap accumulates
+               distant obstacles via local_mirror_layer; wiping it makes
+               the planner think the world is empty and route through
+               invisible walls. -->
+          <ClearCostmapAroundRobot name="ClearAroundRobot-Dance"
+            service_name="local_costmap/clear_around_local_costmap"
+            reset_distance="2.0"/>
+          <DriveOnHeading server_name="gradient_escape"
+            dist_to_travel="0.0" speed="0.1" time_allowance="15.0"/>
+          <BackUp backup_dist="0.10" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

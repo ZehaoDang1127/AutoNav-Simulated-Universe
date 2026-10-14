@@ -1,0 +1,5 @@
+<library path="autonav_filled_cost_critic">
+  <class type="mppi::critics::FilledCostCritic" base_class_type="mppi::critics::CriticFunction">
+    <description>Center cost scoring with filled-body and inscribed-center collision rejection.</description>
+  </class>
+</library>

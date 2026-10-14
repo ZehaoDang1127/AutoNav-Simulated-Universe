@@ -1,0 +1,46 @@
+--- a/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
++++ b/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
+@@ -134,6 +134,8 @@
+   double latest_robot_y_;
+   double latest_robot_yaw_;
+   bool have_robot_pose_;
++  // Optional sensor mount used as the origin of the clearing sector.
++  std::string clearing_frame_;
+ };
+ 
+ }  // namespace local_mirror_layer
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -170,6 +170,9 @@
+   default_value_ = NO_INFORMATION;
+   matchSize();
+   current_ = true;
++
++  declareParameter("clearing_frame", rclcpp::ParameterValue(""));
++  node->get_parameter(name_ + ".clearing_frame", clearing_frame_);
+ 
+   RCLCPP_INFO(
+     rclcpp::get_logger("nav2_costmap_2d"),
+@@ -435,6 +438,22 @@
+     const std::string source_frame = msg->header.frame_id.empty()
+       ? target_frame : msg->header.frame_id;
+ 
++    if (!clearing_frame_.empty()) {
++      try {
++        const auto sensor_tf = tf_buffer_->lookupTransform(
++          target_frame, clearing_frame_, tf2::TimePointZero);
++        robot_x = sensor_tf.transform.translation.x;
++        robot_y = sensor_tf.transform.translation.y;
++        const auto & q = sensor_tf.transform.rotation;
++        robot_yaw = std::atan2(2.0 * (q.w*q.z + q.x*q.y),
++          1.0 - 2.0 * (q.y*q.y + q.z*q.z));
++        have_pose = true;
++      } catch (const tf2::TransformException &) {
++        // Missing sensor pose must never clear retained obstacles.
++        have_pose = false;
++      }
++    }
++
+     std::vector<nav_msgs::msg::OccupancyGrid::ConstSharedPtr> active_masks;
+     active_masks.reserve(exclude_msgs.size());
+     for (const auto & mask : exclude_msgs) {

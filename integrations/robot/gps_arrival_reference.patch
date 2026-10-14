@@ -1,0 +1,90 @@
+--- a/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
++++ b/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
+@@ -842,6 +842,45 @@
+             float(tf_map_base.transform.translation.y),
+         )
+ 
++    def _goal_distance_m(self, active: "_ActiveGoal") -> Optional[float]:
++        """Measure GPS arrival at the antenna in the target's projection.
++
++        The internal EKF estimates base_link, while a GPS waypoint locates
++        the receiver. A shared navsat projection must also share map TF for
++        arrival; comparing it to the independent first-fix EKF mixes datums.
++        Missing projection or antenna TF cannot declare GPS arrival.
++        """
++        if active.goal_type == NavigateToWaypoint.Goal.GOAL_TYPE_LOCAL:
++            position = self._lookup_robot_in_map()
++            if position is None:
++                with self._lock:
++                    position = self._ekf.pos_xy
++            target = active.goal_world_xy
++        elif self._use_navsat_projection:
++            target = active.projected_goal_map
++            if target is None:
++                return None
++            try:
++                transform = self._tf_buffer.lookup_transform(
++                    self._map_frame, GPS_LINK_FRAME, Time(),
++                    rclpy.duration.Duration(seconds=self._tf_timeout_s))
++            except (LookupException, ConnectivityException, ExtrapolationException):
++                return None
++            position = (float(transform.transform.translation.x),
++                        float(transform.transform.translation.y))
++        else:
++            with self._lock:
++                offset = self._gps_link_offset_xy
++                if offset is None:
++                    return None
++                bx, by = self._ekf.pos_xy
++                yaw = self._last_odom_yaw + self._ekf.theta
++                ax, ay = offset
++                position = (bx + math.cos(yaw)*ax - math.sin(yaw)*ay,
++                            by + math.sin(yaw)*ax + math.cos(yaw)*ay)
++            target = active.goal_world_xy
++        return math.hypot(position[0] - target[0], position[1] - target[1])
++
+     # ── Sensor callbacks ───────────────────────────────────────────
+ 
+     def _odom_callback(self, msg: Odometry) -> None:
+@@ -2553,28 +2592,8 @@
+                 if theta_std_deg > active.peak_theta_std_deg:
+                     active.peak_theta_std_deg = theta_std_deg
+ 
+-                # Distance to goal — frame must match goal's native frame.
+-                gx, gy = active.goal_world_xy
+-                if active.goal_type == NavigateToWaypoint.Goal.GOAL_TYPE_LOCAL:
+-                    # LOCAL/map goal: goal_world_xy IS in map frame; need
+-                    # robot's map-frame position. Try map → base_link
+-                    # via TF; fall back to ekf_xy (world frame) on TF
+-                    # failure with imprecision flagged. LOCAL-goal use is
+-                    # an edge case for the GPS waypoint handler — see L1
+-                    # scope note in ``_goal_callback``.
+-                    robot_map_xy = self._lookup_robot_in_map()
+-                    if robot_map_xy is not None:
+-                        d_goal = math.hypot(
+-                            robot_map_xy[0] - gx, robot_map_xy[1] - gy
+-                        )
+-                    else:
+-                        # Imprecise fallback (world ↔ map offset bias).
+-                        d_goal = math.hypot(
+-                            ekf_xy[0] - gx, ekf_xy[1] - gy
+-                        )
+-                else:
+-                    # GPS goal: both quantities are in world frame.
+-                    d_goal = math.hypot(ekf_xy[0] - gx, ekf_xy[1] - gy)
++                distance = self._goal_distance_m(active)
++                d_goal = math.inf if distance is None else distance
+                 refinement_locked = d_goal < (
+                     STOP_REFINE_K * STOP_REFINE_SIGMA_GPS_M
+                 )
+@@ -2726,8 +2745,8 @@
+         )
+         if active is not None:
+             gx, gy = active.goal_world_xy
+-            d_goal = math.hypot(ekf_xy[0] - gx, ekf_xy[1] - gy)
+-            result.final_distance_m = float(d_goal)
++            distance = self._goal_distance_m(active)
++            result.final_distance_m = float(math.inf if distance is None else distance)
+             result.distance_traveled_m = float(active.distance_traveled_m)
+             result.peak_theta_offset_std_deg = float(
+                 max(active.peak_theta_std_deg, theta_std_deg)

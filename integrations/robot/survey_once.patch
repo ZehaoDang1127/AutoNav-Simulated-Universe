@@ -1,0 +1,53 @@
+--- a/isaac_ros-dev/src/custom_behavior_tree_plugins/CMakeLists.txt
++++ b/isaac_ros-dev/src/custom_behavior_tree_plugins/CMakeLists.txt
+@@ -128,6 +128,11 @@
+ 
+ ament_target_dependencies(autonav_path_footprint_safe_bt_node ${dep_pkgs})
+ 
++# === BT node plugin: first-route stationary survey ===
++add_library(autonav_survey_once_bt_node SHARED src/survey_once.cpp)
++target_compile_definitions(autonav_survey_once_bt_node PRIVATE BT_PLUGIN_EXPORT)
++ament_target_dependencies(autonav_survey_once_bt_node ${dep_pkgs})
++
+ # === Standalone node: breadcrumb_buffer ===
+ 
+ add_executable(breadcrumb_buffer src/breadcrumb_buffer.cpp)
+@@ -147,6 +152,7 @@
+                 autonav_path_significantly_changed_bt_node
+                 autonav_is_forward_blocked_bt_node
+                 autonav_path_footprint_safe_bt_node
++                autonav_survey_once_bt_node
+         DESTINATION lib)
+ 
+ install(TARGETS breadcrumb_buffer
+--- /dev/null
++++ b/isaac_ros-dev/src/custom_behavior_tree_plugins/src/survey_once.cpp
+@@ -0,0 +1,28 @@
++#include "behaviortree_cpp_v3/decorator_node.h"
++#include "behaviortree_cpp_v3/bt_factory.h"
++
++namespace autonav_bt
++{
++// Retain success across tree halts and successive navigation goals. A fresh
++// navigator/tree must survey again. Failure or cancellation never skips it.
++class SurveyOnce : public BT::DecoratorNode
++{
++public:
++  using BT::DecoratorNode::DecoratorNode;
++  static BT::PortsList providedPorts() {return {};}
++  BT::NodeStatus tick() override
++  {
++    if (completed_) {return BT::NodeStatus::SUCCESS;}
++    const auto result = child_node_->executeTick();
++    if (result == BT::NodeStatus::SUCCESS) {completed_ = true;}
++    return result;
++  }
++private:
++  bool completed_{false};
++};
++}  // namespace autonav_bt
++
++BT_REGISTER_NODES(factory)
++{
++  factory.registerNodeType<autonav_bt::SurveyOnce>("SurveyOnce");
++}

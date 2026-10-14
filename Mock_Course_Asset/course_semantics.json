@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "course_id": "local_mock_course",
+  "source_sha256": "789f974d627bccf5f48579a350223462d23d76fa9645954fa5edc27c7b33380d",
+  "start_object": "Start",
+  "provisional_gps_target_objects": ["1", "2", "3", "4"],
+  "provisional_finish_marker_object": "5",
+  "line_objects": ["Line.001", "Line.002"],
+  "ramp_objects": ["Ramp"],
+  "pothole_objects": [],
+  "no_mans_land_objects": [],
+  "internal_boundary_objects": [],
+  "finish_gate_objects": [],
+  "referee_checkpoint_objects": [],
+  "notes": [
+    "The fifth waypoint sits close to Start, so it is a candidate finish marker; the Blender object has no finish type or gate geometry.",
+    "The four GPS roles are provisional. The asset labels only three waypoints with waypoint_order; objects 4 and 5 use the generic prop key.",
+    "No potholes, No Man's Land region, internal boundary, finish gate, or ordered referee checkpoints are authored in the source asset."
+  ]
+}

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoNav course live view</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, Segoe UI, sans-serif; background: #0c1520; color: #e7edf4; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 16px 24px; border-bottom: 1px solid #263744; }
+  h1 { font-size: 1.18rem; margin: 0; letter-spacing: .02em; }
+  header small { display: block; margin-top: 3px; color: #a9b9c8; }
+  #connection { border: 1px solid #567087; border-radius: 999px; padding: 5px 12px; font-size: .84rem; white-space: nowrap; }
+  #connection.live { border-color: #5abf8c; color: #8fe5b4; }
+  #connection.saved { border-color: #77a8d5; color: #b5d9fa; }
+  #connection.lost { border-color: #bf7365; color: #f0a697; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 18px; padding: 18px; max-width: 1700px; margin: auto; }
+  .panel { border: 1px solid #263744; border-radius: 12px; background: #111f2c; overflow: hidden; }
+  .maphead { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; color: #b9c8d5; font-size: .88rem; }
+  .maphead strong { color: #e7edf4; }
+  canvas { display: block; width: 100%; height: min(72vh, 740px); min-height: 460px; background: #172633; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; padding: 12px 16px; border-top: 1px solid #263744; color: #b9c8d5; font-size: .78rem; }
+  .legend b { display: inline-block; width: 13px; height: 3px; vertical-align: middle; margin-right: 5px; }
+  aside { display: flex; flex-direction: column; gap: 14px; }
+  .card { padding: 16px; }
+  .card h2 { margin: 0 0 14px; font-size: .85rem; color: #a9b9c8; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; }
+  #result { padding: 13px 15px; border-radius: 8px; background: #233847; color: #e7edf4; line-height: 1.4; overflow-wrap: anywhere; }
+  #result.failed { background: #663331; color: #ffe4df; }
+  #result.complete { background: #275542; color: #ddffed; }
+  dl { display: grid; grid-template-columns: 1fr auto; gap: 10px 6px; margin: 0; font-size: .9rem; }
+  dt { color: #a9b9c8; }
+  dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+  .small { font-size: .8rem; line-height: 1.45; color: #a9b9c8; margin: 0; }
+  @media (max-width: 850px) { main { grid-template-columns: 1fr; } aside { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); } canvas { min-height: 390px; height: 55vh; } }
+</style>
+</head>
+<body>
+<header><div><h1 id="course-title">AutoNav · Course test</h1><small>Live top-down diagnostic view · ground-truth pose is shown for observation only</small></div><span id="connection">Connecting…</span></header>
+<main>
+  <section class="panel">
+    <div class="maphead"><strong>Course and robot</strong><span>+x → &nbsp; +y ↑ &nbsp; meters</span></div>
+    <canvas id="map" aria-label="Top-down course with robot and path"></canvas>
+    <div class="legend">
+      <span><b style="background:#f4f4ed"></b>tape</span><span><b style="background:#e49365"></b>ramp</span>
+      <span><b style="background:#d96e65"></b>obstacle</span><span><b style="background:#62cde4"></b>robot trail</span>
+      <span><b style="background:#e5c862"></b>Nav2 plan</span><span><b style="background:#8be7b2"></b>robot</span>
+    </div>
+  </section>
+  <aside>
+    <section class="panel card"><h2>Run result</h2><div id="result">Waiting for Gazebo and the referee…</div></section>
+    <section class="panel card"><h2>Telemetry</h2><dl>
+      <dt>Waypoints</dt><dd id="waypoints">—</dd>
+      <dt>Current target</dt><dd id="target">—</dd>
+      <dt>Travel</dt><dd id="distance">—</dd>
+      <dt>Speed</dt><dd id="speed">—</dd>
+      <dt>Simulation time</dt><dd id="simtime">—</dd>
+      <dt>Robot position</dt><dd id="position">—</dd>
+      <dt>Failure location</dt><dd id="failure-position">—</dd>
+    </dl></section>
+    <section class="panel card"><h2>About this view</h2><p class="small">This page follows the selected ROS/Gazebo course test. White lines, obstacles, ramp and referee state come from its course and scoring data. The viewer shows the robot and plan without sending commands.</p></section>
+  </aside>
+</main>
+<script>window.__AUTONAV_EMBEDDED_STATE__ = null;</script>
+<script>
+const canvas = document.getElementById('map');
+const ctx = canvas.getContext('2d');
+let state = window.__AUTONAV_EMBEDDED_STATE__;
+const isReplay = Boolean(state);
+const el = id => document.getElementById(id);
+const num = (n, places=1) => Number.isFinite(n) ? n.toFixed(places) : '—';
+
+function bounds(course) {
+  const xs = [], ys = [];
+  const lane=laneBoundaries(course.centerline || []);
+  for (const p of [...lane.left,...lane.right]) { xs.push(p[0]); ys.push(p[1]); }
+  for (const p of course.obstacles || []) { xs.push(p.x_m); ys.push(p.y_m); }
+  for (const p of course.mission_waypoints || []) { xs.push(p.x_m); ys.push(p.y_m); }
+  for (const line of [...(course.internal_lines || []),...(course.dashed_lines || [])]) {
+    xs.push(line.start.x_m,line.end.x_m); ys.push(line.start.y_m,line.end.y_m);
+  }
+  return {minX:Math.min(...xs)-1.5, maxX:Math.max(...xs)+1.5, minY:Math.min(...ys)-1.2, maxY:Math.max(...ys)+1.2};
+}
+function laneBoundaries(center) {
+  const left=[],right=[];
+  center.forEach((p,i)=>{
+    const before=center[Math.max(0,i-1)],after=center[Math.min(center.length-1,i+1)];
+    const dx=after.x_m-before.x_m,dy=after.y_m-before.y_m,len=Math.hypot(dx,dy)||1;
+    const ox=-dy/len*p.width_m/2,oy=dx/len*p.width_m/2;
+    left.push([p.x_m+ox,p.y_m+oy]);right.push([p.x_m-ox,p.y_m-oy]);
+  });
+  return {left,right};
+}
+function screen(p, t) { return [t.left + (p[0]-t.minX)*t.scale, t.top + (t.maxY-p[1])*t.scale]; }
+function fromFrame(p,frame='map') {
+  const tf=frame==='odom' ? state?.odom_to_world : state?.map_to_world;
+  if (!tf) return null;
+  const c=Math.cos(tf[2]),s=Math.sin(tf[2]);
+  return [tf[0]+c*p[0]-s*p[1],tf[1]+s*p[0]+c*p[1]];
+}
+function poly(points, t, color, width=2, dash=[]) {
+  if (!points.length) return;
+  ctx.beginPath(); points.forEach((p,i) => { const [x,y]=screen(p,t); i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); });
+  ctx.setLineDash(dash); ctx.lineWidth=width; ctx.strokeStyle=color; ctx.stroke(); ctx.setLineDash([]);
+}
+function circle(p, radius, t, color, stroke=null) {
+  const [x,y]=screen(p,t); ctx.beginPath(); ctx.arc(x,y,Math.max(2,radius*t.scale),0,Math.PI*2);
+  ctx.fillStyle=color; ctx.fill(); if (stroke) { ctx.strokeStyle=stroke; ctx.lineWidth=1.5; ctx.stroke(); }
+}
+function draw() {
+  const rect=canvas.getBoundingClientRect(), dpr=window.devicePixelRatio || 1;
+  if (canvas.width!==Math.round(rect.width*dpr) || canvas.height!==Math.round(rect.height*dpr)) {
+    canvas.width=Math.round(rect.width*dpr); canvas.height=Math.round(rect.height*dpr);
+  }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const w=rect.width,h=rect.height; ctx.clearRect(0,0,w,h);
+  if (!state?.course) return;
+  const c=state.course, b=bounds(c), pad=38;
+  const scale=Math.min((w-2*pad)/(b.maxX-b.minX),(h-2*pad)/(b.maxY-b.minY));
+  const t={...b,scale,left:(w-(b.maxX-b.minX)*scale)/2,top:(h-(b.maxY-b.minY)*scale)/2};
+  ctx.strokeStyle='#263a48'; ctx.lineWidth=1; ctx.font='11px system-ui'; ctx.fillStyle='#70899a';
+  for (let x=Math.ceil(b.minX/5)*5;x<b.maxX;x+=5) {
+    const [sx]=screen([x,0],t); ctx.beginPath();ctx.moveTo(sx,0);ctx.lineTo(sx,h);ctx.stroke();ctx.fillText(String(x),sx+4,h-10);
+  }
+  for (let y=Math.ceil(b.minY);y<b.maxY;y+=1) {
+    const [,sy]=screen([0,y],t); ctx.beginPath();ctx.moveTo(0,sy);ctx.lineTo(w,sy);ctx.stroke();
+  }
+  const center=c.centerline || [];
+  if (center.length>1 && c.course_geometry !== 'explicit_blender') {
+    const edges=laneBoundaries(center), polygon=[...edges.left,...[...edges.right].reverse()];
+    ctx.beginPath(); polygon.forEach((p,i)=>{const [x,y]=screen(p,t);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.closePath();ctx.fillStyle='#253b3d';ctx.fill();
+    poly(edges.left,t,'#eeeae0',3);
+    poly(edges.right,t,'#eeeae0',3);
+  }
+  for (const r of c.ramps || []) {
+    const cx=r.center_x_m ?? (r.start_x_m+r.end_x_m)/2,cy=r.center_y_m;
+    const half=(r.run_length_m ?? (r.end_x_m-r.start_x_m))/2,yaw=r.yaw_rad ?? 0;
+    const corners=[[-half,-r.width_m/2],[half,-r.width_m/2],[half,r.width_m/2],[-half,r.width_m/2]]
+      .map(([x,y])=>[cx+x*Math.cos(yaw)-y*Math.sin(yaw),cy+x*Math.sin(yaw)+y*Math.cos(yaw)]);
+    ctx.beginPath();corners.forEach((p,i)=>{const [x,y]=screen(p,t);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.closePath();
+    ctx.fillStyle='rgba(228,147,101,.4)';ctx.fill();ctx.strokeStyle='#e49365';ctx.lineWidth=2;ctx.stroke();
+  }
+  for (const line of c.internal_lines || []) poly([[line.start.x_m,line.start.y_m],[line.end.x_m,line.end.y_m]],t,'#fff6ee',Math.max(1,(line.width_m ?? .0762)*scale));
+  for (const line of c.dashed_lines || []) poly([[line.start.x_m,line.start.y_m],[line.end.x_m,line.end.y_m]],t,'#f4eee4',3,[9,7]);
+  for (const o of c.obstacles || []) circle([o.x_m,o.y_m],o.radius_m,t,'#d96e65','#ffb6a3');
+  for (const [i,p] of (c.mission_waypoints || []).entries()) {
+    circle([p.x_m,p.y_m],.18,t,'#e5c862');
+    const [x,y]=screen([p.x_m,p.y_m],t);ctx.fillStyle='#f3dc8b';ctx.font='12px system-ui';ctx.fillText(`${i+1} ${p.label}`,x+8,y-8);
+  }
+  if (c.finish) circle([c.finish.x_m,c.finish.y_m],c.finish.radius_m,t,'rgba(128,210,153,.13)','#80d299');
+  poly(state.trail || [],t,'#62cde4',2.7);
+  poly((state.plan || []).map(p=>fromFrame(p,state.plan_frame)).filter(Boolean),t,'#e5c862',2,[6,4]);
+  for (const [key,radius,color] of [['goal',.12,'#e5c862'],['goal_update',.09,'#edb95a'],['nav_goal',.07,'#f6df90']]) {
+    const point=state[key] && fromFrame(state[key],state[key+'_frame']);
+    if (point) circle(point,radius,t,color,'#fff0ad');
+  }
+  if (state.pose) {
+    const p=state.pose,yaw=p.yaw, cy=p.y+.225*Math.sin(yaw),cx=p.x+.225*Math.cos(yaw),hl=.595,hw=.46;
+    const corners=[[hl,hw],[hl,-hw],[-hl,-hw],[-hl,hw]].map(([a,b])=>[cx+a*Math.cos(yaw)-b*Math.sin(yaw),cy+a*Math.sin(yaw)+b*Math.cos(yaw)]);
+    ctx.beginPath();corners.forEach((q,i)=>{const [x,y]=screen(q,t);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.closePath();
+    ctx.fillStyle='#76df9f';ctx.fill();ctx.strokeStyle='#e0ffea';ctx.lineWidth=2;ctx.stroke();
+    poly([[cx,cy],[cx+.8*Math.cos(yaw),cy+.8*Math.sin(yaw)]],t,'#10291c',3);
+    circle([p.x,p.y],.06,t,'#123b29');
+  }
+  const failure=state.score?.first_failure || state.run_result?.first_failure;
+  if (failure && Number.isFinite(failure.base_x_m) && Number.isFinite(failure.base_y_m)) {
+    const [x,y]=screen([failure.base_x_m,failure.base_y_m],t);
+    ctx.strokeStyle='#ff6565';ctx.lineWidth=3;
+    ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x-12,y-12);ctx.lineTo(x+12,y+12);ctx.moveTo(x+12,y-12);ctx.lineTo(x-12,y+12);ctx.stroke();
+    ctx.fillStyle='#ffb7b7';ctx.font='bold 12px system-ui';ctx.fillText('Failure',x+14,y-10);
+  }
+}
+function update(data) {
+  state=data;const score=data.score || {}, run=data.run_result, pose=data.pose, wps=data.course?.mission_waypoints || [];
+  el('course-title').textContent=`AutoNav · ${data.course?.course_id || 'Course test'}`;
+  el('waypoints').textContent=`${score.waypoints_reached_count ?? 0} / ${score.waypoints_total ?? wps.length}`;
+  el('target').textContent=wps[score.next_waypoint_index ?? 0]?.label || '—';
+  el('distance').textContent=Number.isFinite(score.distance_m)?`${num(score.distance_m)} m`:'—';
+  el('speed').textContent=pose?`${num(pose.speed,2)} m/s`:'—';
+  el('simtime').textContent=Number.isFinite(score.score_time_s)?`${num(score.score_time_s)} s`:'—';
+  el('position').textContent=pose?`${num(pose.x,2)}, ${num(pose.y,2)} m`:'—';
+  const failure=score.first_failure || run?.first_failure;
+  el('failure-position').textContent=failure?`${num(failure.base_x_m,2)}, ${num(failure.base_y_m,2)} m · yaw ${num(failure.yaw_rad*180/Math.PI,0)}°`:'—';
+  const result=el('result'); result.className='';
+  if (run && !run.mission_passed) { result.classList.add('failed');result.textContent=`Failed: ${run.reason || 'mission did not complete'}`; }
+  else if (score.failed) { result.classList.add('failed');result.textContent=`Failed: ${(score.failures || []).join(', ')}`; }
+  else if (score.finish_reached && score.all_waypoints_reached) { result.classList.add('complete');result.textContent='Course completed'; }
+  else if (pose) result.textContent='Running · referee has reported no failure';
+  draw();
+}
+async function poll() {
+  try {
+    const response=await fetch('/state',{cache:'no-store'}); if (!response.ok) throw new Error('HTTP '+response.status);
+    update(await response.json());const tag=el('connection');tag.className='live';tag.textContent='Live';
+  } catch (_) {
+    const tag=el('connection');tag.className='lost';tag.textContent=state?'Run stopped · last frame shown':'Viewer disconnected';
+  }
+}
+window.addEventListener('resize',draw);
+if (isReplay) {
+  update(state);
+  document.title='AutoNav course saved replay';
+  const tag=el('connection');tag.className='saved';tag.textContent='Saved replay';
+} else {
+  poll();setInterval(poll,250);
+}
+</script>
+</body>
+</html>

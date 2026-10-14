@@ -1,0 +1,59 @@
+--- a/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
++++ b/isaac_ros-dev/src/gps_waypoint_handler/gps_waypoint_handler/gps_handler_node.py
+@@ -710,9 +710,8 @@
+ 
+         # ── Publishers ──────────────────────────────────────────────
+         pub_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+-        self._goal_pub = self.create_publisher(
+-            PoseStamped, "/goal_pose", pub_qos
+-        )
++        # Initial goals use the tracked NavigateToPose action only.
++        # Publishing /goal_pose too would create an untracked second goal.
+         # In-mission corrections (1 Hz smoothed candidate) go here.
+         # Nav2's bt_nav.xml wraps the planner in a <GoalUpdater> that
+         # consumes /goal_update and rewrites the BT's {live_goal} in
+@@ -1719,7 +1718,7 @@
+         Setting ``last_published_goal_map = None`` re-arms the "first
+         publish of a leg" branch in ``_publish_goal`` / ``_publisher_tick``
+         (the existing path that calls ``_dispatch_nav2_goal_once`` and
+-        routes through /goal_pose instead of /goal_update), so we reuse
++        uses the tracked action instead of /goal_update), so we reuse
+         the well-tested startup dispatch instead of duplicating it here.
+         Feedback briefly reports ``current_goal_in_map`` as zeros for the
+         one tick between reset and the eager republish in the caller —
+@@ -1792,7 +1791,7 @@
+         active: "_ActiveGoal",
+         goal_map_xy: Tuple[float, float],
+     ) -> None:
+-        """Publish a LOCAL/map-frame goal directly to /goal_pose.
++        """Dispatch a LOCAL/map-frame goal through the tracked action.
+ 
+         For LOCAL goals the goal's (x, y) is *already* in map frame —
+         no projection, no TF lookup, no candidate smoother. This is the
+@@ -1827,7 +1826,6 @@
+         first_pub = active.last_published_goal_map is None
+         if first_pub:
+             self._dispatch_nav2_goal_once(active, msg)
+-            self._goal_pub.publish(msg)
+             active.last_goal_pose_t_s = now_pub_s
+         else:
+             self._goal_update_pub.publish(msg)
+@@ -2023,8 +2021,8 @@
+         msg.pose.orientation.z = qz
+         msg.pose.orientation.w = qw
+ 
+-        # Route: ONLY the first publish of a leg goes to /goal_pose
+-        # (kicks NavigateToPose action / sets the action handle). Every
++        # Route: the first pose uses the tracked NavigateToPose action.
++        # Do not also publish /goal_pose: Nav2 would preempt it. Every
+         # subsequent in-mission update — including the periodic safety
+         # heartbeat — flows through /goal_update so the BT's
+         # GoalUpdater absorbs it without canceling FollowPath. The
+@@ -2037,7 +2035,6 @@
+         )
+         if first_pub:
+             self._dispatch_nav2_goal_once(active, msg)
+-            self._goal_pub.publish(msg)
+             active.last_goal_pose_t_s = now_pub_s
+         else:
+             self._goal_update_pub.publish(msg)

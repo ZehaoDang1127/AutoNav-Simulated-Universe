@@ -1,0 +1,62 @@
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -4,6 +4,7 @@
+ import math
+ import random
+ import sys
++import threading
+ 
+ from .course import Course, load_course, local_to_latlon
+ from .lidar_geometry import raycast_cylinders
+@@ -209,6 +210,7 @@
+             else None
+         )
+         self.imu_pub = self.create_publisher(Imu, "/imu/data", sensor_qos)
++        self._imu_lock = threading.RLock()
+         self._imu_physics_yaw = None
+         self._imu_physics_stamp = None
+         self._imu_previous_yaw = None
+@@ -345,10 +347,12 @@
+                 self.base_x = float(t.x)
+                 self.base_y = float(t.y)
+                 self.heading = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
+-                self._imu_physics_yaw = self.heading
+-                self._imu_physics_stamp = tf.header.stamp
+-                if _stamp_to_float(self._imu_physics_stamp) <= 0.0:
+-                    self._imu_physics_stamp = self.get_clock().now().to_msg()
++                with self._imu_lock:
++                    self._imu_physics_yaw = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
++                    self._imu_physics_stamp = tf.header.stamp
++                    if _stamp_to_float(self._imu_physics_stamp) <= 0.0:
++                        self._imu_physics_stamp = self.get_clock().now().to_msg()
++                    self._publish_imu(self._imu_physics_stamp)
+                 self.last_true_pose_s = _stamp_to_float(
+                     self.get_clock().now().to_msg())
+                 self.received_true_pose = True
+@@ -477,6 +481,11 @@
+         return msg
+ 
+     def _publish_imu(self, stamp: Time) -> None:
++        # Physics and odom timer callbacks may execute concurrently.
++        with self._imu_lock:
++            IgvcSensorHarness._publish_imu_locked(self, stamp)
++
++    def _publish_imu_locked(self, stamp: Time) -> None:
+         # Synthetic gyro, like the synthetic GPS/LiDAR: sample actual physics
+         # motion. Publish angular velocity only, never ground-truth position
+         # or absolute yaw to the estimator.
+@@ -494,9 +503,12 @@
+             if _stamp_to_float(stamp) - sample_s <= 0.10:
+                 return
+             # Gazebo omits unchanged dynamic poses. Supply a stationary gyro
+-            # heartbeat after that feed becomes quiet, without changing the
+-            # previous physics sample used for the next finite difference.
++            # heartbeat after that feed becomes quiet. Its held yaw is
++            # also the finite-difference reference at this newer time;
++            # otherwise resuming motion averages a turn over the whole
++            # stopped interval and silently loses accumulated heading.
+             sample_stamp = stamp
++            self._imu_previous_s = _stamp_to_float(stamp)
+         else:
+             if self._imu_previous_s is not None:
+                 dt = sample_s - self._imu_previous_s

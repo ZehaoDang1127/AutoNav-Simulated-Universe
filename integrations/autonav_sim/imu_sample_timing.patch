@@ -1,0 +1,62 @@
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -210,6 +210,7 @@
+         )
+         self.imu_pub = self.create_publisher(Imu, "/imu/data", sensor_qos)
+         self._imu_physics_yaw = None
++        self._imu_physics_stamp = None
+         self._imu_previous_yaw = None
+         self._imu_previous_s = None
+         self.gps_pub = self.create_publisher(NavSatFix, "/gps_fix", sensor_qos)
+@@ -345,6 +346,9 @@
+                 self.base_y = float(t.y)
+                 self.heading = _yaw_from_quaternion(q.x, q.y, q.z, q.w)
+                 self._imu_physics_yaw = self.heading
++                self._imu_physics_stamp = tf.header.stamp
++                if _stamp_to_float(self._imu_physics_stamp) <= 0.0:
++                    self._imu_physics_stamp = self.get_clock().now().to_msg()
+                 self.last_true_pose_s = _stamp_to_float(
+                     self.get_clock().now().to_msg())
+                 self.received_true_pose = True
+@@ -478,20 +482,31 @@
+         # or absolute yaw to the estimator.
+         if self._imu_physics_yaw is None:
+             return
+-        now_s = _stamp_to_float(stamp)
++        # Differentiate on physics timestamps, not timer receipt times. A
++        # held pose otherwise generates alternating zero/rate-spike samples.
++        sample_stamp = self._imu_physics_stamp
++        if sample_stamp is None:
++            return
++        sample_s = _stamp_to_float(sample_stamp)
+         yaw = self._imu_physics_yaw
+         rate = 0.0
+-        if self._imu_previous_s is not None:
+-            dt = now_s - self._imu_previous_s
+-            if dt <= 0.0:
++        if self._imu_previous_s is not None and sample_s <= self._imu_previous_s:
++            if _stamp_to_float(stamp) - sample_s <= 0.10:
+                 return
+-            delta = math.atan2(math.sin(yaw - self._imu_previous_yaw),
+-                               math.cos(yaw - self._imu_previous_yaw))
+-            rate = delta / dt
+-        self._imu_previous_s = now_s
+-        self._imu_previous_yaw = yaw
++            # Gazebo omits unchanged dynamic poses. Supply a stationary gyro
++            # heartbeat after that feed becomes quiet, without changing the
++            # previous physics sample used for the next finite difference.
++            sample_stamp = stamp
++        else:
++            if self._imu_previous_s is not None:
++                dt = sample_s - self._imu_previous_s
++                delta = math.atan2(math.sin(yaw - self._imu_previous_yaw),
++                                   math.cos(yaw - self._imu_previous_yaw))
++                rate = delta / dt
++            self._imu_previous_s = sample_s
++            self._imu_previous_yaw = yaw
+         msg = Imu()
+-        msg.header.stamp = stamp
++        msg.header.stamp = sample_stamp
+         msg.header.frame_id = "base_link"
+         msg.orientation_covariance[0] = -1.0
+         msg.angular_velocity.z = rate + random.gauss(0.0, 0.005)

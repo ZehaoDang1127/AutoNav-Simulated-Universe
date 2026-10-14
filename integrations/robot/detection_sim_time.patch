@@ -1,0 +1,53 @@
+diff --git a/isaac_ros-dev/src/autonav_detection/launch/detection.launch.py b/isaac_ros-dev/src/autonav_detection/launch/detection.launch.py
+index 46bb406..b7b0f48 100644
+--- a/isaac_ros-dev/src/autonav_detection/launch/detection.launch.py
++++ b/isaac_ros-dev/src/autonav_detection/launch/detection.launch.py
+@@ -15,10 +15,16 @@ from launch.actions import DeclareLaunchArgument
+ from launch.conditions import IfCondition
+ from launch.substitutions import LaunchConfiguration
+ from launch_ros.actions import Node
++from launch_ros.parameter_descriptions import ParameterValue
+ 
+ 
+ def generate_launch_description():
+     pkg_share = get_package_share_directory('autonav_detection')
++    use_sim_time_arg = DeclareLaunchArgument(
++        'use_sim_time', default_value='false',
++        description='Use the simulator clock for all detection nodes.',
++    )
++    use_sim_time = ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)
+ 
+     line_yaml_arg = DeclareLaunchArgument(
+         'line_detector_params',
+@@ -55,7 +61,7 @@ def generate_launch_description():
+         # consumers (line_layer plugin, automated_testing) keep working.
+         name='line_detection_node',
+         output='screen',
+-        parameters=[LaunchConfiguration('line_detector_params')],
++        parameters=[LaunchConfiguration('line_detector_params'), {'use_sim_time': use_sim_time}],
+         condition=IfCondition(LaunchConfiguration('enable_line')),
+     )
+     grade_detector = Node(
+@@ -63,7 +69,7 @@ def generate_launch_description():
+         executable='grade_detector',
+         name='grade_detector',
+         output='screen',
+-        parameters=[LaunchConfiguration('grade_detector_params')],
++        parameters=[LaunchConfiguration('grade_detector_params'), {'use_sim_time': use_sim_time}],
+         condition=IfCondition(LaunchConfiguration('enable_grade')),
+     )
+     lidar_line_detector = Node(
+@@ -71,11 +77,12 @@ def generate_launch_description():
+         executable='lidar_line_detector',
+         name='lidar_line_detector',
+         output='screen',
+-        parameters=[LaunchConfiguration('lidar_line_detector_params')],
++        parameters=[LaunchConfiguration('lidar_line_detector_params'), {'use_sim_time': use_sim_time}],
+         condition=IfCondition(LaunchConfiguration('enable_lidar_line')),
+     )
+ 
+     return LaunchDescription([
++        use_sim_time_arg,
+         line_yaml_arg,
+         grade_yaml_arg,
+         lidar_line_yaml_arg,

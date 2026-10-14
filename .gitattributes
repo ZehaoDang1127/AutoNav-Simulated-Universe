@@ -1,3 +1,9 @@
+# Preserve hashed inputs and Linux integration files on Windows.
+*.sh text eol=lf
+*.patch text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+
 # Heavy 3D assets — keep tracked but off the regular git object
 # store. These are needed for the LiDAR sim to run, so they can't
 # just be .gitignored; LFS is the right home.

@@ -1,0 +1,53 @@
+--- a/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
++++ b/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
+@@ -82,6 +82,9 @@
+   // those decreases to the current sensor-clearing sector.
+   bool allow_decrease_;
+   bool decrease_only_in_front_;
++  // A positive source cost explicitly updates the persisted line halo.
++  // FREE/unknown cells still need the sensor-clearing view gate.
++  bool decrease_nonzero_outside_view_;
+   double decrease_angle_min_rad_;
+   double decrease_angle_max_rad_;
+   double decrease_range_min_m_;
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -23,6 +23,7 @@
+   track_unknown_space_(true),
+   allow_decrease_(false),
+   decrease_only_in_front_(false),
++  decrease_nonzero_outside_view_(false),
+   decrease_angle_min_rad_(-1.2217),
+   decrease_angle_max_rad_(1.2217),
+   decrease_range_min_m_(0.0),
+@@ -58,6 +59,7 @@
+   declareParameter("track_unknown_space", rclcpp::ParameterValue(true));
+   declareParameter("allow_decrease", rclcpp::ParameterValue(false));
+   declareParameter("decrease_only_in_front", rclcpp::ParameterValue(false));
++  declareParameter("decrease_nonzero_outside_view", rclcpp::ParameterValue(false));
+   declareParameter("decrease_angle_min_rad", rclcpp::ParameterValue(-1.2217));
+   declareParameter("decrease_angle_max_rad", rclcpp::ParameterValue(1.2217));
+   declareParameter("decrease_range_min_m", rclcpp::ParameterValue(0.0));
+@@ -76,6 +78,7 @@
+   node->get_parameter(name_ + "." + "track_unknown_space", track_unknown_space_);
+   node->get_parameter(name_ + "." + "allow_decrease", allow_decrease_);
+   node->get_parameter(name_ + "." + "decrease_only_in_front", decrease_only_in_front_);
++  node->get_parameter(name_ + ".decrease_nonzero_outside_view", decrease_nonzero_outside_view_);
+   node->get_parameter(name_ + "." + "decrease_angle_min_rad", decrease_angle_min_rad_);
+   node->get_parameter(name_ + "." + "decrease_angle_max_rad", decrease_angle_max_rad_);
+   node->get_parameter(name_ + "." + "decrease_range_min_m", decrease_range_min_m_);
+@@ -528,8 +531,13 @@
+             continue;
+           }
+ 
++          // A nonzero line-layer sample includes its own persisted sensor
++          // memory. Honor an explicit lower halo cost even at the robot's
++          // side, where shifted old lethal cells otherwise remain forever.
++          // Unobserved FREE cells must still pass the clearing-view gate.
+           if (allow_decrease_ && incoming < existing &&
+-            decreaseAllowedAt(wx, wy, robot_x, robot_y, robot_yaw, have_pose))
++            ((decrease_nonzero_outside_view_ && incoming != FREE_SPACE) ||
++            decreaseAllowedAt(wx, wy, robot_x, robot_y, robot_yaw, have_pose)))
+           {
+             // A FREE source cell means "forget this remembered mark", not
+             // "paint FREE into the global master". Keeping it as no-opinion

@@ -1,0 +1,81 @@
+diff --git a/nav2_mppi_controller/include/nav2_mppi_controller/critics/path_angle_critic.hpp b/nav2_mppi_controller/include/nav2_mppi_controller/critics/path_angle_critic.hpp
+index e3ae2f6..cc107e0 100644
+--- a/nav2_mppi_controller/include/nav2_mppi_controller/critics/path_angle_critic.hpp
++++ b/nav2_mppi_controller/include/nav2_mppi_controller/critics/path_angle_critic.hpp
+@@ -50,6 +50,8 @@ protected:
+   size_t offset_from_furthest_{0};
+   bool reversing_allowed_{true};
+   bool forward_preference_{true};
++  bool consider_lattice_rotations_{false};
++  float lattice_rotation_min_angle_{0.30f};
+ 
+   unsigned int power_{0};
+   float weight_{0};
+diff --git a/nav2_mppi_controller/src/critics/path_angle_critic.cpp b/nav2_mppi_controller/src/critics/path_angle_critic.cpp
+index f09554b..44e8fa2 100644
+--- a/nav2_mppi_controller/src/critics/path_angle_critic.cpp
++++ b/nav2_mppi_controller/src/critics/path_angle_critic.cpp
+@@ -45,6 +45,9 @@ void PathAngleCritic::initialize()
+     forward_preference_,
+     "forward_preference", true);
+ 
++  getParam(consider_lattice_rotations_, "consider_lattice_rotations", false);
++  getParam(lattice_rotation_min_angle_, "lattice_rotation_min_angle", 0.30f);
++
+   if (!reversing_allowed_) {
+     forward_preference_ = true;
+   }
+@@ -62,6 +65,53 @@ void PathAngleCritic::score(CriticData & data)
+     return;
+   }
+ 
++  if (consider_lattice_rotations_) {
++    // Repeated lattice positions can encode a required body rotation. Their
++    // point bearing is undefined, and the later positions can lie behind the
++    // robot. Score the requested heading without truncating forward lookahead.
++    constexpr float position_epsilon_squared = 1e-8f;
++    constexpr float rotation_reach_squared = 0.15f * 0.15f;
++    for (size_t i = 1; i < data.path.x.shape(0); ++i) {
++      const float dx = data.path.x(i) - data.path.x(i-1);
++      const float dy = data.path.y(i) - data.path.y(i-1);
++      if (dx*dx + dy*dy > position_epsilon_squared ||
++        std::abs(angles::shortest_angular_distance(
++          data.path.yaws(i-1), data.path.yaws(i))) <= 1e-4f)
++      {
++        continue;
++      }
++      const float rx = data.path.x(i) - data.state.pose.pose.position.x;
++      const float ry = data.path.y(i) - data.state.pose.pose.position.y;
++      if (rx*rx + ry*ry > rotation_reach_squared) {
++        break;
++      }
++      size_t end = i;
++      while (end + 1 < data.path.x.shape(0)) {
++        const float next_dx = data.path.x(end+1) - data.path.x(i);
++        const float next_dy = data.path.y(end+1) - data.path.y(i);
++        if (next_dx*next_dx + next_dy*next_dy > position_epsilon_squared) {
++          break;
++        }
++        ++end;
++      }
++      const float target_yaw = data.path.yaws(end);
++      // Small turns only align the measured yaw to the lattice bins. Scoring
++      // them as a stationary goal can suppress the following curved motion.
++      if (std::abs(angles::shortest_angular_distance(
++          data.path.yaws(i-1), target_yaw)) < lattice_rotation_min_angle_)
++      {
++        i = end;
++        continue;
++      }
++      // Body orientation matters for the asymmetric footprint, including when
++      // reverse translation is allowed; do not replace this yaw with yaw + pi.
++      data.costs += xt::pow(
++        xt::mean(xt::abs(utils::shortest_angular_distance(
++          data.trajectories.yaws, target_yaw)), {1}, immediate) * weight_, power_);
++      return;
++    }
++  }
++
+   if (utils::withinPositionGoalTolerance(threshold_to_consider_, data.state.pose.pose, data.path)) {
+     return;
+   }

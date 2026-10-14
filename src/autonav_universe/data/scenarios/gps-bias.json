@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "gps-bias",
+  "width_m": 15,
+  "height_m": 8,
+  "spawn": [2, 4, 0],
+  "goals": [[12, 4]],
+  "track": "gps-only",
+  "sensors": ["odometry", "gps"],
+  "gps_faults": [{"kind": "bias", "center_radius": [7, 4, 1.2], "bias_m": [2, 1]}],
+  "arrival_radius_m": 1.0,
+  "max_time_s": 50
+}

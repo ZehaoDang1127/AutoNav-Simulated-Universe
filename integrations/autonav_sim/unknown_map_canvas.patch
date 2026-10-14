@@ -1,0 +1,13 @@
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -984,7 +984,9 @@
+         msg.info.origin.position.x = min_x
+         msg.info.origin.position.y = min_y
+         msg.info.origin.orientation.w = 1.0
+-        msg.data = [0] * (msg.info.width * msg.info.height)
++        # Geometry alone is not an observation of free space. The robot
++        # costmap layers supply obstacles and view-gated free cells.
++        msg.data = [-1] * (msg.info.width * msg.info.height)
+         self.map_pub.publish(msg)
+ 
+     def _map_bounds(self, resolution: float) -> tuple[float, float, float, float]:

@@ -1,0 +1,81 @@
+--- a/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
++++ b/isaac_ros-dev/src/local_mirror_layer/include/local_mirror_layer/local_mirror_layer.hpp
+@@ -94,6 +94,10 @@
+   // Ignore occupied source cells below this OccupancyGrid value. FREE cells
+   // still flow through allow_decrease clearing; UNKNOWN still means no opinion.
+   int min_occupied_value_to_mirror_;
++  // Persist view-gated FREE cells; fill only UNKNOWN cells in the master.
++  bool mirror_free_space_{false};
++  // Optional finite planning penalty for still-unobserved master cells.
++  int unknown_space_cost_{-1};
+ 
+   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr sub_;
+   std::vector<rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr> exclude_subs_;
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -3,6 +3,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstring>
++#include <stdexcept>
+ #include <vector>
+ 
+ #include "geometry_msgs/msg/transform_stamped.hpp"
+@@ -50,6 +51,15 @@
+   auto node = node_.lock();
+   if (!node) {
+     return;
++  }
++
++  declareParameter("mirror_free_space", rclcpp::ParameterValue(false));
++  node->get_parameter(name_ + ".mirror_free_space", mirror_free_space_);
++
++  declareParameter("unknown_space_cost", rclcpp::ParameterValue(-1));
++  node->get_parameter(name_ + ".unknown_space_cost", unknown_space_cost_);
++  if (unknown_space_cost_ < -1 || unknown_space_cost_ > 252) {
++    throw std::invalid_argument("unknown_space_cost must be -1 or between 0 and 252");
+   }
+ 
+   declareParameter("enabled", rclcpp::ParameterValue(true));
+@@ -499,6 +509,19 @@
+           }
+           const unsigned int idx = my * size_x_ + mx;
+ 
++          if (mirror_free_space_ && src_val == 0 &&
++            !excludedByMask(wx_src, wy_src, active_masks))
++          {
++            // The rolling grid is FREE even outside the sensor view.
++            // Only retain FREE within the configured clearing sector.
++            if (allow_decrease_ &&
++              decreaseAllowedAt(wx, wy, robot_x, robot_y, robot_yaw, have_pose))
++            {
++              costmap_[idx] = FREE_SPACE;
++            }
++            continue;
++          }
++
+           if (excludedByMask(wx_src, wy_src, active_masks)) {
+             costmap_[idx] = NO_INFORMATION;
+             continue;
+@@ -602,6 +625,21 @@
+     for (int i = min_i; i < max_i; ++i) {
+       const unsigned int idx = j * size_x_ + i;
+       const unsigned char layer_cost = costmap_[idx];
++      if (mirror_free_space_ && layer_cost == FREE_SPACE) {
++        const unsigned int free_midx = j * master_size_x + i;
++        // Another layer may have marked an obstacle at this location.
++        if (master_array[free_midx] == NO_INFORMATION) {
++          master_array[free_midx] = FREE_SPACE;
++        }
++      }
++      if (unknown_space_cost_ >= 0) {
++        const unsigned int unknown_midx = j * master_size_x + i;
++        // Humble Smac skips UNKNOWN in its obstacle heuristic. Give
++        // exploration a finite penalty, without calling it FREE.
++        if (master_array[unknown_midx] == NO_INFORMATION) {
++          master_array[unknown_midx] = static_cast<unsigned char>(unknown_space_cost_);
++        }
++      }
+       if (layer_cost == NO_INFORMATION || layer_cost == FREE_SPACE) {
+         continue;
+       }

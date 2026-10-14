@@ -1,0 +1,17 @@
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -602,4 +602,4 @@
+-  // Overwrite master where this layer has an occupied opinion. FREE source
++  // Max-merge occupied opinions so a soft halo cannot erase another obstacle. FREE source
+   // cells clear this layer's memory by turning the cell back to
+   // NO_INFORMATION above, but are not painted into master; that prevents one
+   // mirror source from clearing another global layer.
+@@ -622,5 +622,7 @@
+       }
+       const unsigned int midx = j * master_size_x + i;
+-      master_array[midx] = layer_cost;
++      if (master_array[midx] == NO_INFORMATION || layer_cost > master_array[midx]) {
++        master_array[midx] = layer_cost;
++      }
+     }
+   }

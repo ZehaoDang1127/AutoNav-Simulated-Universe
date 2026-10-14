@@ -1,0 +1,13 @@
+diff --git a/igvc_competition_sim/config/igvc_competition_compact.yaml b/igvc_competition_sim/config/igvc_competition_compact.yaml
+index 7c25d78..e26b669 100644
+--- a/igvc_competition_sim/config/igvc_competition_compact.yaml
++++ b/igvc_competition_sim/config/igvc_competition_compact.yaml
+@@ -70,7 +70,7 @@ speed_check:
+   blocking_stop_s: 60.0
+ 
+ mission_waypoints:
+-  - {label: bootstrap_local, type: local, x_m: 6.0, y_m: 0.25, radius_m: 0.75}
++  - {label: bootstrap_local, type: local, x_m: 6.0, y_m: 0.25, radius_m: 1.0}
+   - {label: obstacle_gps, type: gps, x_m: 15.8, y_m: -0.75, radius_m: 1.0}
+   # Keep the ramp goal on the drivable lower half of the ramp lane so the
+   # padded footprint remains inside the ramp corridor.

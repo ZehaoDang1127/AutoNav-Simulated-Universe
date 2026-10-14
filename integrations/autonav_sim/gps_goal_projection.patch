@@ -1,0 +1,13 @@
+--- a/igvc_competition_sim/launch/igvc_competition.launch.py
++++ b/igvc_competition_sim/launch/igvc_competition.launch.py
+@@ -632,7 +632,9 @@
+         executable="gps_handler_node",
+         name="gps_handler_node",
+         output="screen",
+-        parameters=[{"use_sim_time": True}],
++        parameters=[{"use_sim_time": True,
++                     "use_navsat_projection": ParameterValue(
++                         LaunchConfiguration("launch_gps_ekf"), value_type=bool)}],
+         condition=IfCondition(launch_gps_handler),
+     )
+ 

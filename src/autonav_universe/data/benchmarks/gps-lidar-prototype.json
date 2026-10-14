@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "name": "gps-lidar-prototype",
+  "scenarios": ["gps-combined"],
+  "seeds": [1, 2, 3]
+}

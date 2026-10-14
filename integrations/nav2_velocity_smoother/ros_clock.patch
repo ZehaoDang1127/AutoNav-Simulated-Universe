@@ -1,0 +1,40 @@
+diff --git a/nav2_velocity_smoother/src/velocity_smoother.cpp b/nav2_velocity_smoother/src/velocity_smoother.cpp
+index cb2ca19..0d96ba6 100644
+--- a/nav2_velocity_smoother/src/velocity_smoother.cpp
++++ b/nav2_velocity_smoother/src/velocity_smoother.cpp
+@@ -20,6 +20,7 @@
+ #include <vector>
+ 
+ #include "nav2_velocity_smoother/velocity_smoother.hpp"
++#include "rclcpp/create_timer.hpp"
+ 
+ using namespace std::chrono_literals;
+ using nav2_util::declare_parameter_if_not_declared;
+@@ -133,9 +134,10 @@ VelocitySmoother::on_activate(const rclcpp_lifecycle::State &)
+ {
+   RCLCPP_INFO(get_logger(), "Activating");
+   smoothed_cmd_pub_->on_activate();
+-  double timer_duration_ms = 1000.0 / smoothing_frequency_;
+-  timer_ = this->create_wall_timer(
+-    std::chrono::milliseconds(static_cast<int>(timer_duration_ms)),
++  // Acceleration increments and command timeout use ROS time. The timer
++  // must use the same clock so simulation slowdown/pause cannot alter the ramp.
++  timer_ = rclcpp::create_timer(
++    this, get_clock(), rclcpp::Duration::from_seconds(1.0 / smoothing_frequency_),
+     std::bind(&VelocitySmoother::smootherTimer, this));
+ 
+   dyn_params_handler_ = this->add_on_set_parameters_callback(
+@@ -341,9 +343,10 @@ VelocitySmoother::dynamicParametersCallback(std::vector<rclcpp::Parameter> param
+           timer_.reset();
+         }
+ 
+-        double timer_duration_ms = 1000.0 / smoothing_frequency_;
+-        timer_ = this->create_wall_timer(
+-          std::chrono::milliseconds(static_cast<int>(timer_duration_ms)),
++        // Acceleration increments and command timeout use ROS time. The timer
++        // must use the same clock so simulation slowdown/pause cannot alter the ramp.
++        timer_ = rclcpp::create_timer(
++          this, get_clock(), rclcpp::Duration::from_seconds(1.0 / smoothing_frequency_),
+           std::bind(&VelocitySmoother::smootherTimer, this));
+       } else if (name == "velocity_timeout") {
+         velocity_timeout_ = rclcpp::Duration::from_seconds(parameter.as_double());

@@ -1,0 +1,138 @@
+diff --git a/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_significantly_changed_decorator.cpp b/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_significantly_changed_decorator.cpp
+index 63237f8..d01098d 100644
+--- a/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_significantly_changed_decorator.cpp
++++ b/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_significantly_changed_decorator.cpp
+@@ -41,6 +41,15 @@ public:
+     if (!node_->has_parameter("path_significantly_changed.force_update_period_s")) {
+       node_->declare_parameter("path_significantly_changed.force_update_period_s", 0.5);
+     }
++    if (!node_->has_parameter("path_significantly_changed.preserve_shorter_route")) {
++      node_->declare_parameter("path_significantly_changed.preserve_shorter_route", false);
++    }
++    if (!node_->has_parameter("path_significantly_changed.route_length_margin_m")) {
++      node_->declare_parameter("path_significantly_changed.route_length_margin_m", 0.50);
++    }
++    if (!node_->has_parameter("path_significantly_changed.route_deviation_limit_m")) {
++      node_->declare_parameter("path_significantly_changed.route_deviation_limit_m", 0.30);
++    }
+     if (!node_->has_parameter("path_significantly_changed.empty_path_hold_period_s")) {
+       node_->declare_parameter("path_significantly_changed.empty_path_hold_period_s", 1.0);
+     }
+@@ -49,6 +58,7 @@ public:
+   static BT::PortsList providedPorts() {
+     return {
+       BT::InputPort<nav_msgs::msg::Path>("path"),
++      BT::InputPort<geometry_msgs::msg::PoseStamped>("goal", "Requested mission goal, before arrival-cell selection"),
+       BT::OutputPort<nav_msgs::msg::Path>("filtered_path"),
+     };
+   }
+@@ -107,9 +117,30 @@ public:
+       has_last_update_time_ && force_update_period > 0.0 &&
+       (node_->now() - last_update_time_).seconds() >= force_update_period;
+ 
+-    const bool significantly_changed = force_update || pathDiffers(
++    // Replanning from a moving pose can repeatedly move a turn farther away.
++    // Compare the candidate with the untraveled suffix, not the original route
++    // length. Active-route footprint guards still run on every child tick;
++    // rejection or recovery releases this commitment immediately.
++    geometry_msgs::msg::PoseStamped mission_goal;
++    const bool have_goal = static_cast<bool>(getInput("goal", mission_goal));
++    const bool unchanged_goal = !have_goal || (has_filtered_goal_ &&
++      sameRequestedGoal(mission_goal, filtered_goal_));
++    const bool retain_route = unchanged_goal && has_filtered_path_ && child_started_ &&
++      last_status == BT::NodeStatus::RUNNING && node_->get_parameter(
++      "path_significantly_changed.preserve_shorter_route").as_bool() &&
++      candidateIsLonger(new_path, filtered_path_, node_->get_parameter(
++      "path_significantly_changed.route_length_margin_m").as_double(),
++      node_->get_parameter("path_significantly_changed.route_deviation_limit_m").as_double(),
++      have_goal && has_filtered_goal_);
++
++    if (retain_route) {
++      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
++        "PathSignificantlyChanged: retaining shorter remaining route to unchanged mission goal");
++    }
++
++    const bool significantly_changed = !retain_route && (force_update || pathDiffers(
+       new_path, filtered_path_, rms_threshold, max_point_delta,
+-      start_delta_threshold, length_delta_threshold, n_compare);
++      start_delta_threshold, length_delta_threshold, n_compare));
+ 
+     if (significantly_changed || !child_started_ || !has_filtered_path_ ||
+         last_status == BT::NodeStatus::IDLE) {
+@@ -119,6 +150,8 @@ public:
+       // feedback/result callbacks; it just sees this stable filtered path
+       // while same-looking replans arrive.
+       filtered_path_ = new_path;
++      filtered_goal_ = mission_goal;
++      has_filtered_goal_ = have_goal;
+       has_filtered_path_ = true;
+       child_started_ = true;
+       last_update_time_ = node_->now();
+@@ -143,6 +176,8 @@ public:
+ private:
+   rclcpp::Node::SharedPtr node_;
+   nav_msgs::msg::Path filtered_path_;
++  geometry_msgs::msg::PoseStamped filtered_goal_;
++  bool has_filtered_goal_ = false;
+   bool child_started_ = false;
+   bool has_filtered_path_ = false;
+   rclcpp::Time last_update_time_{0, 0, RCL_ROS_TIME};
+@@ -156,11 +191,58 @@ private:
+     }
+     child_started_ = false;
+     has_filtered_path_ = false;
++    has_filtered_goal_ = false;
+     has_last_update_time_ = false;
+     has_empty_path_hold_time_ = false;
+     filtered_path_ = nav_msgs::msg::Path{};
+   }
+ 
++  static bool sameRequestedGoal(const geometry_msgs::msg::PoseStamped & a,
++                                const geometry_msgs::msg::PoseStamped & b) {
++    const auto & p = a.pose.position;
++    const auto & q = b.pose.position;
++    const auto & u = a.pose.orientation;
++    const auto & v = b.pose.orientation;
++    return a.header.frame_id == b.header.frame_id &&
++      std::hypot(p.x-q.x, p.y-q.y) < 0.01 &&
++      std::abs(u.x*v.x+u.y*v.y+u.z*v.z+u.w*v.w) > 1.0-1e-6;
++  }
++
++  static bool candidateIsLonger(const nav_msgs::msg::Path & candidate,
++                               const nav_msgs::msg::Path & accepted,
++                               double margin, double deviation_limit,
++                               bool known_same_goal) {
++    if (candidate.poses.empty() || accepted.poses.size() < 2 ||
++        candidate.header.frame_id != accepted.header.frame_id) return false;
++    const auto & goal = candidate.poses.back().pose.position;
++    const auto & old_goal = accepted.poses.back().pose.position;
++    // Arrival cells can differ by twice the planner's positional tolerance.
++    // They are not a new mission goal when the original request is unchanged.
++    if (!known_same_goal && std::hypot(goal.x-old_goal.x, goal.y-old_goal.y) > 0.30) return false;
++
++    const auto & start = candidate.poses.front().pose.position;
++    double closest = std::numeric_limits<double>::infinity();
++    double prefix = 0.0, progress = 0.0;
++    for (size_t i = 1; i < accepted.poses.size(); ++i) {
++      const auto & a = accepted.poses[i-1].pose.position;
++      const auto & b = accepted.poses[i].pose.position;
++      const double dx = b.x-a.x, dy = b.y-a.y;
++      const double squared = dx*dx+dy*dy;
++      const double fraction = squared > 1e-12 ? std::clamp(
++        ((start.x-a.x)*dx+(start.y-a.y)*dy)/squared, 0.0, 1.0) : 0.0;
++      const double distance = std::hypot(start.x-a.x-fraction*dx,
++                                        start.y-a.y-fraction*dy);
++      const double length = std::sqrt(squared);
++      if (distance < closest) {
++        closest = distance;
++        progress = prefix + fraction*length;
++      }
++      prefix += length;
++    }
++    if (closest > std::max(0.0, deviation_limit)) return false;
++    return pathLength(candidate) > prefix-progress + std::max(0.0, margin);
++  }
++
+   static bool pathDiffers(const nav_msgs::msg::Path & a,
+                           const nav_msgs::msg::Path & b,
+                           double rms_threshold_m,

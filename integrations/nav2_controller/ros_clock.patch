@@ -1,0 +1,112 @@
+diff --git a/nav2_controller/src/controller_server.cpp b/nav2_controller/src/controller_server.cpp
+index 2504114..baed756 100644
+--- a/nav2_controller/src/controller_server.cpp
++++ b/nav2_controller/src/controller_server.cpp
+@@ -26,6 +26,7 @@
+ #include "nav2_util/node_utils.hpp"
+ #include "nav2_util/geometry_utils.hpp"
+ #include "nav2_controller/controller_server.hpp"
++#include "nav2_controller/ros_clock_rate.hpp"
+ 
+ using namespace std::chrono_literals;
+ using rcl_interfaces::msg::ParameterType;
+@@ -383,7 +384,11 @@ void ControllerServer::computeControl()
+     progress_checker_->reset();
+ 
+     last_valid_cmd_time_ = now();
+-    rclcpp::WallRate loop_rate(controller_frequency_);
++    ROSClockRate loop_rate(get_clock(), controller_frequency_);
++    const auto keep_running = [this]() {
++        return rclcpp::ok() && action_server_ != nullptr &&
++               action_server_->is_server_active() && !action_server_->is_cancel_requested();
++      };
+     while (rclcpp::ok()) {
+       if (action_server_ == nullptr || !action_server_->is_server_active()) {
+         RCLCPP_DEBUG(get_logger(), "Action server unavailable or inactive. Stopping.");
+@@ -399,9 +404,12 @@ void ControllerServer::computeControl()
+ 
+       // Don't compute a trajectory until costmap is valid (after clear costmap)
+       rclcpp::Rate r(100);
+-      while (!costmap_ros_->isCurrent()) {
++      while (!costmap_ros_->isCurrent() && keep_running()) {
+         r.sleep();
+       }
++      if (!keep_running()) {
++        continue;
++      }
+ 
+       updateGlobalPath();
+ 
+@@ -412,7 +420,7 @@ void ControllerServer::computeControl()
+         break;
+       }
+ 
+-      if (!loop_rate.sleep()) {
++      if (!loop_rate.sleep(keep_running)) {
+         RCLCPP_WARN(
+           get_logger(), "Control loop missed its desired rate of %.4fHz",
+           controller_frequency_);
+diff --git a/nav2_controller/include/nav2_controller/ros_clock_rate.hpp b/nav2_controller/include/nav2_controller/ros_clock_rate.hpp
+new file mode 100644
+--- /dev/null
++++ b/nav2_controller/include/nav2_controller/ros_clock_rate.hpp
+@@ -0,0 +1,59 @@
++// Copyright 2026 AutoNav contributors
++// Licensed under the Apache License, Version 2.0.
++#ifndef NAV2_CONTROLLER__ROS_CLOCK_RATE_HPP_
++#define NAV2_CONTROLLER__ROS_CLOCK_RATE_HPP_
++
++#include <chrono>
++#include <cmath>
++#include <functional>
++#include <stdexcept>
++#include <thread>
++#include "rclcpp/rclcpp.hpp"
++
++namespace nav2_controller
++{
++// rclcpp::Rate in Humble uses system time. Poll the node clock instead so
++// control-sequence shifts consume the same interval as simulated motion.
++// The short wall wait also permits action cancellation when ROS time stops.
++class ROSClockRate
++{
++public:
++  ROSClockRate(rclcpp::Clock::SharedPtr clock, double frequency)
++  : clock_(std::move(clock)), period_(periodFromFrequency(frequency)),
++    last_observed_(clock_->now()), next_(last_observed_ + period_) {}
++
++  bool sleep(const std::function<bool()> & keep_running)
++  {
++    while (keep_running()) {
++      const auto current = clock_->now();
++      if (current < last_observed_) {
++        // A restarted simulation must not wait for the previous run's time.
++        next_ = current + period_;
++      }
++      last_observed_ = current;
++      if (current >= next_) {
++        const bool missed = current - next_ >= period_;
++        next_ = missed ? current + period_ : next_ + period_;
++        return !missed;
++      }
++      std::this_thread::sleep_for(std::chrono::milliseconds(1));
++    }
++    return true;
++  }
++
++private:
++  static rclcpp::Duration periodFromFrequency(double frequency)
++  {
++    if (!std::isfinite(frequency) || frequency <= 0.0) {
++      throw std::invalid_argument("Controller frequency must be positive and finite");
++    }
++    return rclcpp::Duration::from_seconds(1.0 / frequency);
++  }
++
++  rclcpp::Clock::SharedPtr clock_;
++  rclcpp::Duration period_;
++  rclcpp::Time last_observed_;
++  rclcpp::Time next_;
++};
++}  // namespace nav2_controller
++#endif  // NAV2_CONTROLLER__ROS_CLOCK_RATE_HPP_

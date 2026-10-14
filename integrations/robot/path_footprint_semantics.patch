@@ -1,0 +1,87 @@
+diff --git a/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_footprint_safe_condition.cpp b/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_footprint_safe_condition.cpp
+index 8098ca4..c9a9e9f 100644
+--- a/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_footprint_safe_condition.cpp
++++ b/isaac_ros-dev/src/custom_behavior_tree_plugins/src/path_footprint_safe_condition.cpp
+@@ -123,8 +123,10 @@ public:
+     pose_stride = std::max(1, pose_stride);
+     max_pose_step_m = std::max(0.001, max_pose_step_m);
+     max_yaw_step_rad = std::max(0.001, max_yaw_step_rad);
+-    const unsigned char collision_threshold = static_cast<unsigned char>(
+-      std::clamp(std::min(lethal_threshold, inscribed_threshold), 0, 255));
++    const unsigned char footprint_threshold = static_cast<unsigned char>(
++      std::clamp(lethal_threshold, 0, 255));
++    const unsigned char center_threshold = static_cast<unsigned char>(
++      std::clamp(inscribed_threshold, 0, 255));
+ 
+     if (!costmap_sub_ || costmap_topic != costmap_topic_) {
+       resetCostmapSubscription(costmap_topic);
+@@ -179,14 +181,16 @@ public:
+     auto validate_pose = [&](const geometry_msgs::msg::PoseStamped & pose, const char * where) {
+       const auto world_footprint = transformFootprint(footprint, pose);
+       if (!footprintIsSafe(
+-          world_footprint, *costmap, collision_threshold, ignore_unknown))
++          world_footprint, {pose.pose.position.x, pose.pose.position.y},
++          *costmap, footprint_threshold, center_threshold, ignore_unknown))
+       {
+         const auto & p = pose.pose.position;
+         RCLCPP_WARN(
+           node_->get_logger(),
+           "PathFootprintSafe: rejecting path at %s (%.2f, %.2f); "
+-          "footprint overlaps global cost >= %u",
+-          where, p.x, p.y, static_cast<unsigned int>(collision_threshold));
++          "footprint overlaps lethal cost >= %u or center has inscribed cost >= %u",
++          where, p.x, p.y, static_cast<unsigned int>(footprint_threshold),
++          static_cast<unsigned int>(center_threshold));
+         return false;
+       }
+       return true;
+@@ -410,8 +414,10 @@ private:
+ 
+   static bool footprintIsSafe(
+     const std::vector<Point2D> & footprint,
++    const Point2D & center,
+     const nav2_msgs::msg::Costmap & costmap,
+-    unsigned char collision_threshold,
++    unsigned char footprint_threshold,
++    unsigned char center_threshold,
+     bool ignore_unknown)
+   {
+     double min_x = std::numeric_limits<double>::infinity();
+@@ -440,6 +446,28 @@ private:
+       return false;
+     }
+ 
++    // Nav2's 253 inscribed band already includes the robot's inscribed
++    // radius. Testing every footprint cell against 253 adds the footprint
++    // radius a second time and rejects safe legal gaps. Check that band at
++    // the robot center, then test the entire swept polygon against actual
++    // lethal (254) cells.
++    const int center_mx = static_cast<int>(std::floor((center.x - origin_x) / resolution));
++    const int center_my = static_cast<int>(std::floor((center.y - origin_y) / resolution));
++    if (center_mx < 0 || center_my < 0 || center_mx >= size_x || center_my >= size_y) {
++      return false;
++    }
++    const auto center_index = static_cast<size_t>(center_my) * static_cast<size_t>(size_x) +
++      static_cast<size_t>(center_mx);
++    if (center_index >= costmap.data.size()) {
++      return false;
++    }
++    const unsigned char center_cost = costmap.data[center_index];
++    if (!(ignore_unknown && center_cost == nav2_costmap_2d::NO_INFORMATION) &&
++      center_cost >= center_threshold)
++    {
++      return false;
++    }
++
+     for (int my = min_my; my <= max_my; ++my) {
+       const double wy = origin_y + (static_cast<double>(my) + 0.5) * resolution;
+       for (int mx = min_mx; mx <= max_mx; ++mx) {
+@@ -457,7 +485,7 @@ private:
+         if (ignore_unknown && cost == nav2_costmap_2d::NO_INFORMATION) {
+           continue;
+         }
+-        if (cost >= collision_threshold) {
++        if (cost >= footprint_threshold) {
+           return false;
+         }
+       }

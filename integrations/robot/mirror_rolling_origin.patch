@@ -1,0 +1,43 @@
+diff --git a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+index be3e748..f10ee72 100644
+--- a/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
++++ b/isaac_ros-dev/src/local_mirror_layer/src/local_mirror_layer.cpp
+@@ -312,6 +312,13 @@ void LocalMirrorLayer::updateBounds(
+     return;
+   }
+ 
++  // LayeredCostmap rolls its master before updating layers. Synchronize
++  // our own origin while preserving world positions, including between
++  // source publishes; otherwise fixed obstacles move with the robot.
++  if (layered_costmap_->isRolling()) {
++    matchSize();
++  }
++
+   nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg;
+   {
+     std::lock_guard<std::mutex> lock(msg_mtx_);
+@@ -716,7 +723,7 @@ void LocalMirrorLayer::matchSize()
+     const double wy = old_oy + (oy + 0.5) * old_res;
+     for (unsigned int ox = 0; ox < old_size_x; ++ox) {
+       const unsigned char cost = saved[oy * old_size_x + ox];
+-      if (cost == NO_INFORMATION || cost == FREE_SPACE) {
++      if (cost == NO_INFORMATION || (cost == FREE_SPACE && !mirror_free_space_)) {
+         continue;
+       }
+       const double wx = old_ox + (ox + 0.5) * old_res;
+@@ -725,13 +732,13 @@ void LocalMirrorLayer::matchSize()
+         continue;
+       }
+       const unsigned int idx = nmy * size_x_ + nmx;
+-      if (cost > costmap_[idx]) {
++      if (costmap_[idx] == NO_INFORMATION || cost > costmap_[idx]) {
+         costmap_[idx] = cost;
+       }
+     }
+   }
+ 
+-  RCLCPP_INFO(
++  RCLCPP_DEBUG(
+     rclcpp::get_logger("nav2_costmap_2d"),
+     "LocalMirrorLayer matchSize: %ux%u -> %ux%u (preserved cells)",
+     old_size_x, old_size_y, new_size_x, new_size_y);

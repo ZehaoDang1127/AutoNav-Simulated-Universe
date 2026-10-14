@@ -1,0 +1,27 @@
+diff --git a/nav2_smac_planner/src/collision_checker.cpp b/nav2_smac_planner/src/collision_checker.cpp
+--- a/nav2_smac_planner/src/collision_checker.cpp
++++ b/nav2_smac_planner/src/collision_checker.cpp
+@@ -120,19 +120,10 @@
+     footprint_cost_ = costmap_->getCost(
+       center_x, center_y);
+ 
+-    if (footprint_cost_ < possible_inscribed_cost_) {
+-      if (possible_inscribed_cost_ > 0) {
+-        return false;
+-      } else {
+-        RCLCPP_ERROR_THROTTLE(
+-          logger_, *clock_, 1000,
+-          "Inflation layer either not found or inflation is not set sufficiently for "
+-          "optimized non-circular collision checking capabilities. It is HIGHLY recommended to set"
+-          " the inflation radius to be at MINIMUM half of the robot's largest cross-section. See "
+-          "github.com/ros-planning/navigation2/tree/main/nav2_smac_planner#potential-fields"
+-          " for full instructions. This will substantially impact run-time performance.");
+-      }
+-    }
++    // Inflation is sampled at the nearest cell center, whereas this body
++    // query can lie up to half a cell away on each axis. A cost below the
++    // circumscribed threshold cannot certify every continuous body corner.
++    // The immutable occupied-cell cache below provides the safe shortcut.
+ 
+     // If its inscribed, in collision, or unknown in the middle,
+     // no need to even check the footprint, its invalid

@@ -1,0 +1,35 @@
+diff --git a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+index c630f48..1917eda 100644
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -722,6 +722,30 @@ class IgvcSensorHarness(Node):
+             if self._point_segment_distance(x, y, tape.start, tape.end) <= (
+                     0.5 * tape.width_m):
+                 return True
++        # The generated world paints white strips along both sides of every
++        # ramp. Include the same strips in the synthetic LiDAR intensity
++        # return so the line detector can observe the ramp corridor. Without
++        # this, the viewer shows visible edge tape but navigation receives no
++        # corresponding scan points and can plan off the narrow deck.
++        tape_half_width = (0.5 * self.course.tapes[0].width_m
++                           if self.course.tapes else 0.0381)
++        for ramp in self.course.ramps:
++            run_length = (ramp.run_length_m if ramp.run_length_m is not None
++                          else ramp.end_x_m - ramp.start_x_m)
++            if run_length <= 0.0:
++                continue
++            center_x = (ramp.center_x_m if ramp.center_x_m is not None
++                        else 0.5 * (ramp.start_x_m + ramp.end_x_m))
++            dx = x - center_x
++            dy = y - ramp.center_y_m
++            c = math.cos(ramp.yaw_rad)
++            s = math.sin(ramp.yaw_rad)
++            local_x = c * dx + s * dy
++            local_y = -s * dx + c * dy
++            if (abs(local_x) <= 0.5 * run_length
++                    and abs(abs(local_y) - 0.5 * ramp.width_m)
++                    <= tape_half_width):
++                return True
+         return False
+ 
+     @staticmethod

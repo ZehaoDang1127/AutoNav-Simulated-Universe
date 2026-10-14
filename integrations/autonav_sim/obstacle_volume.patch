@@ -1,0 +1,163 @@
+--- a/igvc_competition_sim/setup.py
++++ b/igvc_competition_sim/setup.py
+@@ -52,6 +52,7 @@
+             "igvc_verified_spawn = igvc_competition_sim.verified_spawn:main",
+             "igvc_run_analyzer = igvc_competition_sim.run_analyzer:main",
+             "igvc_physics_gyro = igvc_competition_sim.physics_imu:main",
++            "igvc_obstacle_volume = igvc_competition_sim.obstacle_volume:main",
+             "igvc_sensor_harness = igvc_competition_sim.sensor_harness:main",
+         ],
+     },
+--- a/igvc_competition_sim/launch/igvc_competition.launch.py
++++ b/igvc_competition_sim/launch/igvc_competition.launch.py
+@@ -601,6 +601,15 @@
+             "robot_profile": LaunchConfiguration("robot_profile"),
+         }],
+         condition=IfCondition(launch_monitor),
++    )
++
++    obstacle_volume = Node(
++        package="igvc_competition_sim",
++        executable="igvc_obstacle_volume",
++        name="igvc_obstacle_volume",
++        output="screen",
++        parameters=[{"use_sim_time": True}],
++        condition=IfCondition(launch_pca_scan_converters),
+     )
+ 
+     pca_scan = Node(
+@@ -752,6 +761,7 @@
+         monitor,
+         OpaqueFunction(function=_detection_process),
+         OpaqueFunction(function=_gps_ekf_process),
++        obstacle_volume,
+         pca_scan,
+         pca_scan_clear,
+         gps_handler,
+--- /dev/null
++++ b/igvc_competition_sim/igvc_competition_sim/obstacle_volume.py
+@@ -0,0 +1,124 @@
++"""Infer solid round-obstacle footprints from classified LiDAR surface returns."""
++import math
++import numpy as np
++import rclpy
++from rclpy.node import Node
++from rclpy.qos import qos_profile_sensor_data
++from sensor_msgs.msg import PointCloud2
++from sensor_msgs_py import point_cloud2
++from std_msgs.msg import Header
++from tf2_ros import Buffer, TransformListener, TransformException
++
++
++def round_obstacle_volumes(points, spacing=.035):
++    """Preserve returns; fill only well-conditioned, consistent circular clusters.
++
++    No course, pose, object inventory, or fixed obstacle radius is used.
++    Sparse/non-round/ambiguous clusters retain their observed points.
++    """
++    source=np.asarray(points,dtype=np.float64).reshape(-1,3)
++    source=source[np.isfinite(source).all(axis=1)]
++    if len(source)<5:return source.astype(np.float32),[]
++    # Vertical laser layers repeat the same footprint. Deduplicate before
++    # spatial clustering and fitting, preserving all original 3D returns.
++    _,indices=np.unique(np.round(source[:,:2],3),axis=0,return_index=True)
++    footprint=source[indices]
++    link=.16
++    buckets={}
++    parent=list(range(len(footprint)))
++    def root(i):
++        while parent[i]!=i:
++            parent[i]=parent[parent[i]];i=parent[i]
++        return i
++    for i,point in enumerate(footprint):
++        cell=tuple(np.floor(point[:2]/link).astype(int))
++        for x in range(cell[0]-1,cell[0]+2):
++            for y in range(cell[1]-1,cell[1]+2):
++                for j in buckets.get((x,y),[]):
++                    if np.linalg.norm(point[:2]-footprint[j,:2])<=link:
++                        parent[root(i)]=root(j)
++        buckets.setdefault(cell,[]).append(i)
++    clusters={}
++    for i in range(len(footprint)):clusters.setdefault(root(i),[]).append(i)
++    fills=[];fits=[]
++    for indices in clusters.values():
++        cluster=footprint[indices]
++        if len(cluster)<5:continue
++        mean=cluster[:,:2].mean(axis=0)
++        centered=cluster[:,:2]-mean
++        covariance=np.linalg.eigvalsh(centered.T@centered/len(cluster))
++        if covariance[0]<1e-5 or covariance[0]/max(covariance[1],1e-9)<.002:continue
++        matrix=np.c_[2*centered,np.ones(len(cluster))]
++        solution,_,rank,_=np.linalg.lstsq(matrix,(centered**2).sum(axis=1),rcond=None)
++        if rank<3:continue
++        radius2=solution[2]+(solution[:2]**2).sum()
++        if radius2<=0:continue
++        radius=math.sqrt(radius2);center=mean+solution[:2]
++        distances=np.linalg.norm(cluster[:,:2]-center,axis=1)
++        residual=np.max(abs(distances-radius))
++        angles=np.sort(np.arctan2(cluster[:,1]-center[1],cluster[:,0]-center[0]))
++        span=2*math.pi-np.max(np.diff(np.r_[angles,angles[0]+2*math.pi]))
++        if not (.10<=radius<=1.5 and residual<=.015 and span>=.45):continue
++        # Half a costmap cell covers fit/raster projection uncertainty. Body
++        # safety padding remains a separate controller/planner parameter.
++        occupied_radius=radius+.025
++        values=np.arange(-occupied_radius,occupied_radius+spacing*.5,spacing)
++        xx,yy=np.meshgrid(values,values)
++        mask=xx*xx+yy*yy<=occupied_radius*occupied_radius
++        fill=np.c_[center[0]+xx[mask],center[1]+yy[mask],
++                   np.full(mask.sum(),np.median(cluster[:,2]))]
++        fills.append(fill)
++        fits.append({'center':center.tolist(),'radius':radius,'residual':float(residual),
++                     'span_rad':float(span),'observed_points':len(cluster)})
++    result=np.concatenate([source,*fills]) if fills else source
++    return result.astype(np.float32),fits
++
++
++class ObstacleVolume(Node):
++    def __init__(self):
++        super().__init__('igvc_obstacle_volume')
++        self.tf_buffer=Buffer()
++        self.tf_listener=TransformListener(self.tf_buffer,self)
++        self.publisher=self.create_publisher(
++            PointCloud2,'/scan_pca_obstacle_volume_points',qos_profile_sensor_data)
++        self.subscription=self.create_subscription(
++            PointCloud2,'/scan_pca_filtered_points',self.callback,qos_profile_sensor_data)
++
++    def callback(self,message):
++        observed=[(float(p[0]),float(p[1]),float(p[2])) for p in
++                  point_cloud2.read_points(message,field_names=('x','y','z'),skip_nans=True)]
++        observed=np.asarray(observed,dtype=np.float64).reshape(-1,3)
++        if message.header.frame_id!='lidar_planar':
++            try:
++                transform=self.tf_buffer.lookup_transform(
++                    'lidar_planar',message.header.frame_id,
++                    rclpy.time.Time.from_msg(message.header.stamp)).transform
++            except TransformException:
++                self.get_logger().warning('Waiting for cloud-to-planar TF',throttle_duration_sec=3.)
++                return
++            q=transform.rotation;x,y,z,w=q.x,q.y,q.z,q.w
++            rotation=np.array([[1-2*(y*y+z*z),2*(x*y-z*w),2*(x*z+y*w)],
++                               [2*(x*y+z*w),1-2*(x*x+z*z),2*(y*z-x*w)],
++                               [2*(x*z-y*w),2*(y*z+x*w),1-2*(x*x+y*y)]])
++            translation=transform.translation
++            observed=observed@rotation.T+[translation.x,translation.y,translation.z]
++        # Match the old LaserScan converter's upright height/visibility filter,
++        # then mark a 2D footprint at z=0 in its sensor-origin planar frame.
++        # Raw inverted-sensor z must not become a negative-height map point.
++        observed=observed[(observed[:,2]>=-.10)&(observed[:,2]<=1.50)]
++        # Preserve the existing sensor-origin 140-degree marking sector.
++        observed=[p for p in observed if abs(math.atan2(p[1],p[0]))<=1.2217
++                  and .30<=math.hypot(p[0],p[1])<=25.0]
++        filled,_=round_obstacle_volumes(observed)
++        filled[:,2]=0.
++        header=Header(stamp=message.header.stamp,frame_id='lidar_planar')
++        self.publisher.publish(point_cloud2.create_cloud_xyz32(header,filled.tolist()))
++
++
++def main(args=None):
++    rclpy.init(args=args)
++    node=ObstacleVolume()
++    try:rclpy.spin(node)
++    finally:
++        node.destroy_node()
++        if rclpy.ok():rclpy.shutdown()
