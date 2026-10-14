@@ -7,14 +7,18 @@ This is the shared Python simulation path described in [INTEGRATION_PLAN.md](INT
 From the repository root with Python 3.10 or later:
 
 ```powershell
-python -m venv .venv
+if (-not (Test-Path .\.venv\Scripts\python.exe)) {
+    python -m venv .venv
+}
 .\.venv\Scripts\python.exe -m pip install -e ".[gui]"
 .\.venv\Scripts\autonav-universe.exe validate-plugin --algorithm examples.my_navigation.policy:MyNavigator
 .\.venv\Scripts\autonav-universe.exe run --scenario straight --algorithm examples.my_navigation.policy:MyNavigator --seed 1 --output runs/example
 .\.venv\Scripts\autonav-universe.exe app
 ```
 
-On macOS/Linux, replace `Scripts` with `bin`. Omit `[gui]` for the headless CLI. `run --gui` opens recorded truth replay after the episode; `app` has Run, Pause, Reset, algorithm, scenario, and seed controls with live sensor availability and truth-viewer motion.
+On macOS/Linux, create the environment with `python3 -m venv .venv` only if it does not already exist, and use `.venv/bin/python` and `.venv/bin/autonav-universe`. Omit `[gui]` for the headless CLI. `run --gui` opens recorded truth replay after the episode; `app` has Run, Pause, Reset, algorithm, scenario, and seed controls with live sensor availability and truth-viewer motion.
+
+Always install dependencies with the same environment's Python used to launch the app. A bare `pip` may target a different installation. If the Python version inside an existing `.venv` changed, run `.\.venv\Scripts\python.exe -m pip install --force-reinstall -e ".[gui]"` from the repository root to replace incompatible compiled GUI dependencies.
 
 ## Compare algorithms
 

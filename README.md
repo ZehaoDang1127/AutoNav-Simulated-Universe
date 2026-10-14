@@ -50,7 +50,9 @@ optional GUI uses PyQt5.
 ### Windows PowerShell
 
 ```powershell
-python -m venv .venv
+if (-not (Test-Path .\.venv\Scripts\python.exe)) {
+    python -m venv .venv
+}
 .\.venv\Scripts\python.exe -m pip install -e ".[gui]"
 .\.venv\Scripts\autonav-universe.exe validate-plugin --algorithm examples.my_navigation.policy:MyNavigator
 .\.venv\Scripts\autonav-universe.exe run --scenario straight --seed 1 --output runs/example
@@ -60,14 +62,17 @@ python -m venv .venv
 ### macOS / Linux
 
 ```bash
-python3 -m venv .venv
+if [ ! -x .venv/bin/python ]; then
+    python3 -m venv .venv
+fi
 ./.venv/bin/python -m pip install -e '.[gui]'
 ./.venv/bin/autonav-universe validate-plugin --algorithm examples.my_navigation.policy:MyNavigator
 ./.venv/bin/autonav-universe run --scenario straight --seed 1 --output runs/example
 ./.venv/bin/autonav-universe app
 ```
 
-For headless use, install with `pip install -e .` and omit `app`. `run` uses
+For headless use, omit `[gui]` from the matching environment's install command
+and omit `app`. `run` uses
 `autonav_universe.algorithms:ReferenceNavigator` by default; select your own
 implementation with `--algorithm module:Class`. The example plugin is in
 [policy.py](examples/my_navigation/policy.py).
@@ -78,6 +83,20 @@ receive public observations and return velocity commands; the runner owns the
 robot dynamics, sensor timing, private scoring, and truth replay. See the
 [plugin contract and fidelity notes](UNIVERSE_README.md) before interpreting
 benchmark results.
+
+### Windows environment troubleshooting
+
+Use `.\.venv\Scripts\python.exe -m pip` when launching the app from `.venv`.
+A bare `pip` command may install into a different Python environment.
+
+If `.venv` was recreated with a different Python version, old compiled Qt
+components can remain installed for the previous version. Reinstall the GUI
+dependencies with the environment's own interpreter:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --force-reinstall -e ".[gui]"
+.\.venv\Scripts\autonav-universe.exe app
+```
 
 ### Benchmarks and replay
 

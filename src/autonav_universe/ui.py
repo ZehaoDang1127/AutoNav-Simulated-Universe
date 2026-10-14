@@ -5,6 +5,8 @@ This module is never imported by the headless engine or worker process.
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 import threading
 from pathlib import Path
 
@@ -13,7 +15,12 @@ def _qt():
     try:
         from PyQt5 import QtCore, QtGui, QtWidgets
     except ImportError as exc:
-        raise RuntimeError("Qt view requires: pip install -e '.[gui]'") from exc
+        interpreter = f'& "{sys.executable}"' if sys.platform == "win32" else shlex.quote(sys.executable)
+        raise RuntimeError(
+            f"Qt could not load in {sys.executable}: {exc}.\n"
+            "From the repository root, reinstall GUI dependencies with:\n"
+            f'{interpreter} -m pip install --force-reinstall -e ".[gui]"'
+        ) from exc
     return QtCore, QtGui, QtWidgets
 
 
