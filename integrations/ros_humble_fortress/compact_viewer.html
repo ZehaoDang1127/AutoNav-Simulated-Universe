@@ -141,7 +141,7 @@ function draw() {
     ctx.fillStyle='rgba(228,147,101,.4)';ctx.fill();ctx.strokeStyle='#e49365';ctx.lineWidth=2;ctx.stroke();
   }
   for (const line of c.internal_lines || []) poly([[line.start.x_m,line.start.y_m],[line.end.x_m,line.end.y_m]],t,'#fff6ee',Math.max(1,(line.width_m ?? .0762)*scale));
-  for (const line of c.dashed_lines || []) poly([[line.start.x_m,line.start.y_m],[line.end.x_m,line.end.y_m]],t,'#f4eee4',3,[9,7]);
+  for (const line of c.dashed_lines || []) poly([[line.start.x_m,line.start.y_m],[line.end.x_m,line.end.y_m]],t,'#f4eee4',Math.max(1,(line.width_m ?? .0762)*scale),[(line.dash_length_m ?? .75)*scale,(line.gap_length_m ?? .45)*scale]);
   for (const o of c.obstacles || []) circle([o.x_m,o.y_m],o.radius_m,t,'#d96e65','#ffb6a3');
   for (const [i,p] of (c.mission_waypoints || []).entries()) {
     circle([p.x_m,p.y_m],.18,t,'#e5c862');

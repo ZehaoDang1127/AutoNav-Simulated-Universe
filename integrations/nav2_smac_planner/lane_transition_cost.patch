@@ -1,0 +1,262 @@
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/lane_semantics.hpp b/nav2_smac_planner/include/nav2_smac_planner/lane_semantics.hpp
+new file mode 100644
+index 0000000..c00604c
+--- /dev/null
++++ b/nav2_smac_planner/include/nav2_smac_planner/lane_semantics.hpp
+@@ -0,0 +1,83 @@
++// ROS-independent geometry shared by the line layer and Smac overlays.
++// Copyright 2026 AutoNav contributors. SPDX-License-Identifier: Apache-2.0
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <stdexcept>
++#include <vector>
++
++namespace autonav_lane
++{
++struct Point {double x, y;};
++struct Segment {Point a, b;};
++
++inline std::vector<Segment> segments(const std::vector<double> & values)
++{
++  if (values.size() % 4 != 0) {throw std::invalid_argument("Lane segments require groups of four coordinates");}
++  std::vector<Segment> result;
++  for (size_t i = 0; i < values.size(); i += 4) {
++    for (size_t j = i; j < i + 4; ++j) {
++      if (!std::isfinite(values[j])) {throw std::invalid_argument("Non-finite lane coordinate");}
++    }
++    Segment line{{values[i], values[i+1]}, {values[i+2], values[i+3]}};
++    if (std::hypot(line.b.x-line.a.x, line.b.y-line.a.y) < 1e-8) {
++      throw std::invalid_argument("Zero-length lane segment");
++    }
++    result.push_back(line);
++  }
++  return result;
++}
++
++inline double distance(Point p, const Segment & s)
++{
++  const double dx = s.b.x-s.a.x, dy = s.b.y-s.a.y;
++  const double t = std::max(0.0, std::min(1.0,
++      ((p.x-s.a.x)*dx+(p.y-s.a.y)*dy)/(dx*dx+dy*dy)));
++  return std::hypot(p.x-s.a.x-t*dx, p.y-s.a.y-t*dy);
++}
++
++inline bool near(Point p, const std::vector<Segment> & lines, double tolerance)
++{
++  return std::any_of(lines.begin(), lines.end(), [&](const Segment & s) {
++      return distance(p, s) <= tolerance;
++    });
++}
++
++// The hard classification wins where paint segments overlap or meet.
++inline bool crossable(Point p, const std::vector<Segment> & dividers,
++  const std::vector<Segment> & boundaries, double tolerance)
++{
++  return !near(p, boundaries, tolerance) && near(p, dividers, tolerance);
++}
++
++inline unsigned int crossings(Point a, Point b, const std::vector<Segment> & lines)
++{
++  std::vector<double> hits;
++  for (const auto & s : lines) {
++    const double sx = s.b.x-s.a.x, sy = s.b.y-s.a.y;
++    const double sa = sx*(a.y-s.a.y)-sy*(a.x-s.a.x);
++    const double sb = sx*(b.y-s.a.y)-sy*(b.x-s.a.x);
++    // Assign a point exactly on the divider to the nonnegative side. This
++    // charges a split crossing once, independent of primitive sample density.
++    if ((sa >= 0) == (sb >= 0)) {continue;}
++    const double t = sa/(sa-sb);
++    const Point hit{a.x+t*(b.x-a.x), a.y+t*(b.y-a.y)};
++    const double u = ((hit.x-s.a.x)*sx+(hit.y-s.a.y)*sy)/(sx*sx+sy*sy);
++    if (u >= -1e-9 && u <= 1+1e-9) {hits.push_back(t);}
++  }
++  std::sort(hits.begin(), hits.end());
++  hits.erase(std::unique(hits.begin(), hits.end(), [](double a, double b) {
++      return std::abs(a-b) < 1e-8;
++    }), hits.end());
++  return static_cast<unsigned int>(hits.size());
++}
++
++inline unsigned char quadratic_cost(double distance_m, double inscribed_m, double reach_m)
++{
++  if (distance_m <= 1e-12) {return 254;}
++  if (distance_m <= inscribed_m) {return 253;}
++  if (reach_m <= 0 || distance_m >= inscribed_m+reach_m) {return 0;}
++  const double fraction = 1-(distance_m-inscribed_m)/reach_m;
++  return static_cast<unsigned char>(252*fraction*fraction);
++}
++}  // namespace autonav_lane
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/node_lattice.hpp b/nav2_smac_planner/include/nav2_smac_planner/node_lattice.hpp
+index 4fe6a28..594febb 100644
+--- a/nav2_smac_planner/include/nav2_smac_planner/node_lattice.hpp
++++ b/nav2_smac_planner/include/nav2_smac_planner/node_lattice.hpp
+@@ -37,8 +37,12 @@
+ #include "nav2_smac_planner/node_hybrid.hpp"
+ #include "nav2_smac_planner/utils.hpp"
+ 
++#include "nav2_smac_planner/lane_semantics.hpp"
++
+ namespace nav2_smac_planner
+ {
++struct LaneTransitionModel {std::vector<autonav_lane::Segment> dividers; double cost_grid = 0;};
++extern thread_local LaneTransitionModel lane_transition_model;
+ 
+ // forward declare
+ class NodeLattice;
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp b/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
+index 31eb631..8dbd831 100644
+--- a/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
++++ b/nav2_smac_planner/include/nav2_smac_planner/smac_planner_lattice.hpp
+@@ -115,6 +115,9 @@ protected:
+   LatticeMetadata _metadata;
+   std::string _global_frame, _name;
+   SearchInfo _search_info;
++  std::vector<double> _lane_dividers;
++  std::string _lane_semantics_frame;
++  double _lane_change_cost_m = 0;
+   bool _allow_unknown;
+   bool _allow_goal_heading_change{false};
+   int _max_iterations;
+diff --git a/nav2_smac_planner/include/nav2_smac_planner/types.hpp b/nav2_smac_planner/include/nav2_smac_planner/types.hpp
+index f2cd73d..c82a79a 100644
+--- a/nav2_smac_planner/include/nav2_smac_planner/types.hpp
++++ b/nav2_smac_planner/include/nav2_smac_planner/types.hpp
+@@ -46,6 +46,7 @@ struct SearchInfo
+   std::string lattice_filepath;
+   bool cache_obstacle_heuristic;
+   bool allow_reverse_expansion;
++  bool lane_transition_costs = false;
+ };
+ 
+ /**
+diff --git a/nav2_smac_planner/src/analytic_expansion.cpp b/nav2_smac_planner/src/analytic_expansion.cpp
+index d0e068c..6642d0e 100644
+--- a/nav2_smac_planner/src/analytic_expansion.cpp
++++ b/nav2_smac_planner/src/analytic_expansion.cpp
+@@ -52,6 +52,10 @@ typename AnalyticExpansion<NodeT>::NodePtr AnalyticExpansion<NodeT>::tryAnalytic
+   const NodeGetter & getter, int & analytic_iterations,
+   int & closest_distance)
+ {
++  // Analytic completion bypasses edge transition costs. Use the lattice
++  // search throughout when classified dividers are configured.
++  if (_search_info.lane_transition_costs) {return NodePtr(nullptr);}
++
+   // This must be a valid motion model for analytic expansion to be attempted
+   if (_motion_model == MotionModel::DUBIN || _motion_model == MotionModel::REEDS_SHEPP ||
+     _motion_model == MotionModel::STATE_LATTICE)
+diff --git a/nav2_smac_planner/src/node_lattice.cpp b/nav2_smac_planner/src/node_lattice.cpp
+index e445325..21305c6 100644
+--- a/nav2_smac_planner/src/node_lattice.cpp
++++ b/nav2_smac_planner/src/node_lattice.cpp
+@@ -35,6 +35,7 @@ namespace nav2_smac_planner
+ {
+ 
+ // defining static member for all instance to share
++thread_local LaneTransitionModel lane_transition_model;
+ LatticeMotionTable NodeLattice::motion_table;
+ float NodeLattice::size_lookup = 25;
+ LookupTable NodeLattice::dist_heuristic_lookup_table;
+@@ -274,8 +275,19 @@ float NodeLattice::getTraversalCost(const NodePtr & child)
+   MotionPrimitive * transition_prim = child->getMotionPrimitive();
+   const float prim_length =
+     transition_prim->trajectory_length / motion_table.lattice_metadata.grid_resolution;
++  double lane_cost = 0;
++  if (!lane_transition_model.dividers.empty()) {
++    const double resolution = motion_table.lattice_metadata.grid_resolution;
++    autonav_lane::Point previous{pose.x, pose.y};
++    for (const auto & sample : transition_prim->poses) {
++      autonav_lane::Point next{pose.x+sample._x/resolution, pose.y+sample._y/resolution};
++      lane_cost += autonav_lane::crossings(previous, next, lane_transition_model.dividers) *
++        lane_transition_model.cost_grid;
++      previous = next;
++    }
++  }
+   if (prim == nullptr) {
+-    return prim_length;
++    return prim_length + lane_cost;
+   }
+ 
+   // Pure rotation in place 1 angular bin in either direction
+@@ -307,7 +319,7 @@ float NodeLattice::getTraversalCost(const NodePtr & child)
+     travel_cost *= motion_table.reverse_penalty;
+   }
+ 
+-  return travel_cost;
++  return travel_cost + lane_cost;
+ }
+ 
+ float NodeLattice::getHeuristicCost(
+diff --git a/nav2_smac_planner/src/smac_planner_lattice.cpp b/nav2_smac_planner/src/smac_planner_lattice.cpp
+index a624ed6..9ba5ba3 100644
+--- a/nav2_smac_planner/src/smac_planner_lattice.cpp
++++ b/nav2_smac_planner/src/smac_planner_lattice.cpp
+@@ -85,6 +85,18 @@ void SmacPlannerLattice::configure(
+       });
+   }
+ 
++  nav2_util::declare_parameter_if_not_declared(node, name + ".lane_dividers", rclcpp::ParameterValue(std::vector<double>{}));
++  nav2_util::declare_parameter_if_not_declared(node, name + ".lane_semantics_frame", rclcpp::ParameterValue(std::string("map")));
++  nav2_util::declare_parameter_if_not_declared(node, name + ".lane_change_cost_m", rclcpp::ParameterValue(0.0));
++  node->get_parameter(name + ".lane_dividers", _lane_dividers);
++  node->get_parameter(name + ".lane_semantics_frame", _lane_semantics_frame);
++  node->get_parameter(name + ".lane_change_cost_m", _lane_change_cost_m);
++  autonav_lane::segments(_lane_dividers);
++  if (!std::isfinite(_lane_change_cost_m) || _lane_change_cost_m < 0 || _lane_semantics_frame.empty()) {
++    throw std::invalid_argument("Invalid lane transition configuration");
++  }
++  _search_info.lane_transition_costs = !_lane_dividers.empty();
++
+   // General planner params
+   double analytic_expansion_max_length_m;
+   bool smooth_path;
+@@ -301,6 +313,26 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlanImpl(
+   const double circumscribed_cost = findCircumscribedCost(_costmap_ros);
+   lock.unlock();
+   auto * _costmap = _planning_costmap.get();
++  lane_transition_model.dividers.clear();
++  lane_transition_model.cost_grid = _lane_change_cost_m / _costmap->getResolution();
++  if (!_lane_dividers.empty()) {
++    double tx = 0, ty = 0, yaw = 0;
++    if (_lane_semantics_frame != _global_frame) {
++      // Missing semantic TF fails planning; it must never silently drop costs.
++      const auto transform = _travel_tf->lookupTransform(_global_frame, _lane_semantics_frame, tf2::TimePointZero);
++      tx = transform.transform.translation.x;
++      ty = transform.transform.translation.y;
++      yaw = tf2::getYaw(transform.transform.rotation);
++    }
++    const double c = std::cos(yaw), s = std::sin(yaw), res = _costmap->getResolution();
++    auto grid_point = [&](autonav_lane::Point p) {
++        return autonav_lane::Point{(tx+c*p.x-s*p.y-_costmap->getOriginX())/res-.5,
++          (ty+s*p.x+c*p.y-_costmap->getOriginY())/res-.5};
++      };
++    for (const auto & line : autonav_lane::segments(_lane_dividers)) {
++      lane_transition_model.dividers.push_back({grid_point(line.a), grid_point(line.b)});
++    }
++  }
+   TraveledCorridor::FrameTransform history_transform;
+   const TraveledCorridor::FrameTransform * transform = nullptr;
+   const auto history_frame = _traveled_corridor.frame();
+@@ -448,7 +480,7 @@ nav_msgs::msg::Path SmacPlannerLattice::createPlanImpl(
+ #endif
+ 
+   // Smooth plan
+-  if (_smoother && num_iterations > 1) {
++  if (_smoother && num_iterations > 1 && _lane_dividers.empty()) {
+     const auto unsmoothed_plan = plan;
+     _smoother->smooth(plan, _costmap, time_remaining);
+     // The smoother checks center costs. Preserve the searched route if its
+@@ -510,6 +542,13 @@ SmacPlannerLattice::dynamicParametersCallback(std::vector<rclcpp::Parameter> par
+   for (auto parameter : parameters) {
+     const auto & type = parameter.get_type();
+     const auto & name = parameter.get_name();
++    if (name == _name + ".lane_dividers" || name == _name + ".lane_change_cost_m" ||
++      name == _name + ".lane_semantics_frame")
++    {
++      result.successful = false;
++      result.reason = "Lane semantics are immutable per session; restart with a new profile";
++      return result;
++    }
+ 
+     if (type == ParameterType::PARAMETER_DOUBLE) {
+       if (name == _name + ".max_planning_time") {

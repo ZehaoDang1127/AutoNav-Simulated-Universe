@@ -1,0 +1,222 @@
+diff --git a/isaac_ros-dev/src/line_layer/include/line_layer/lane_semantics.hpp b/isaac_ros-dev/src/line_layer/include/line_layer/lane_semantics.hpp
+new file mode 100644
+index 0000000..c00604c
+--- /dev/null
++++ b/isaac_ros-dev/src/line_layer/include/line_layer/lane_semantics.hpp
+@@ -0,0 +1,83 @@
++// ROS-independent geometry shared by the line layer and Smac overlays.
++// Copyright 2026 AutoNav contributors. SPDX-License-Identifier: Apache-2.0
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <stdexcept>
++#include <vector>
++
++namespace autonav_lane
++{
++struct Point {double x, y;};
++struct Segment {Point a, b;};
++
++inline std::vector<Segment> segments(const std::vector<double> & values)
++{
++  if (values.size() % 4 != 0) {throw std::invalid_argument("Lane segments require groups of four coordinates");}
++  std::vector<Segment> result;
++  for (size_t i = 0; i < values.size(); i += 4) {
++    for (size_t j = i; j < i + 4; ++j) {
++      if (!std::isfinite(values[j])) {throw std::invalid_argument("Non-finite lane coordinate");}
++    }
++    Segment line{{values[i], values[i+1]}, {values[i+2], values[i+3]}};
++    if (std::hypot(line.b.x-line.a.x, line.b.y-line.a.y) < 1e-8) {
++      throw std::invalid_argument("Zero-length lane segment");
++    }
++    result.push_back(line);
++  }
++  return result;
++}
++
++inline double distance(Point p, const Segment & s)
++{
++  const double dx = s.b.x-s.a.x, dy = s.b.y-s.a.y;
++  const double t = std::max(0.0, std::min(1.0,
++      ((p.x-s.a.x)*dx+(p.y-s.a.y)*dy)/(dx*dx+dy*dy)));
++  return std::hypot(p.x-s.a.x-t*dx, p.y-s.a.y-t*dy);
++}
++
++inline bool near(Point p, const std::vector<Segment> & lines, double tolerance)
++{
++  return std::any_of(lines.begin(), lines.end(), [&](const Segment & s) {
++      return distance(p, s) <= tolerance;
++    });
++}
++
++// The hard classification wins where paint segments overlap or meet.
++inline bool crossable(Point p, const std::vector<Segment> & dividers,
++  const std::vector<Segment> & boundaries, double tolerance)
++{
++  return !near(p, boundaries, tolerance) && near(p, dividers, tolerance);
++}
++
++inline unsigned int crossings(Point a, Point b, const std::vector<Segment> & lines)
++{
++  std::vector<double> hits;
++  for (const auto & s : lines) {
++    const double sx = s.b.x-s.a.x, sy = s.b.y-s.a.y;
++    const double sa = sx*(a.y-s.a.y)-sy*(a.x-s.a.x);
++    const double sb = sx*(b.y-s.a.y)-sy*(b.x-s.a.x);
++    // Assign a point exactly on the divider to the nonnegative side. This
++    // charges a split crossing once, independent of primitive sample density.
++    if ((sa >= 0) == (sb >= 0)) {continue;}
++    const double t = sa/(sa-sb);
++    const Point hit{a.x+t*(b.x-a.x), a.y+t*(b.y-a.y)};
++    const double u = ((hit.x-s.a.x)*sx+(hit.y-s.a.y)*sy)/(sx*sx+sy*sy);
++    if (u >= -1e-9 && u <= 1+1e-9) {hits.push_back(t);}
++  }
++  std::sort(hits.begin(), hits.end());
++  hits.erase(std::unique(hits.begin(), hits.end(), [](double a, double b) {
++      return std::abs(a-b) < 1e-8;
++    }), hits.end());
++  return static_cast<unsigned int>(hits.size());
++}
++
++inline unsigned char quadratic_cost(double distance_m, double inscribed_m, double reach_m)
++{
++  if (distance_m <= 1e-12) {return 254;}
++  if (distance_m <= inscribed_m) {return 253;}
++  if (reach_m <= 0 || distance_m >= inscribed_m+reach_m) {return 0;}
++  const double fraction = 1-(distance_m-inscribed_m)/reach_m;
++  return static_cast<unsigned char>(252*fraction*fraction);
++}
++}  // namespace autonav_lane
+diff --git a/isaac_ros-dev/src/line_layer/include/line_layer/line_layer.hpp b/isaac_ros-dev/src/line_layer/include/line_layer/line_layer.hpp
+index 4b7146f..766cd25 100644
+--- a/isaac_ros-dev/src/line_layer/include/line_layer/line_layer.hpp
++++ b/isaac_ros-dev/src/line_layer/include/line_layer/line_layer.hpp
+@@ -140,6 +140,13 @@ private:
+   // mirror consumes this already-inflated line-only topic after stock
+   // obstacle inflation so tape keeps a narrower halo than PCA obstacles.
+   double inflation_radius_;
++  bool quadratic_clearance_ = false;
++  double clearance_reach_m_ = .8;
++  double lane_classification_tolerance_m_ = .12;
++  std::string lane_semantics_frame_;
++  std::vector<double> lane_dividers_, lane_hard_boundaries_;
++  std::vector<geometry_msgs::msg::Vector3> filterClassifiedDividers(
++    const std::vector<geometry_msgs::msg::Vector3> & points);
+   double cost_scaling_factor_;
+   // Cells within this distance of a line are pinned to
+   // INSCRIBED_INFLATED_OBSTACLE; the exponential decay starts from
+diff --git a/isaac_ros-dev/src/line_layer/src/line_layer.cpp b/isaac_ros-dev/src/line_layer/src/line_layer.cpp
+index 100fcb8..8a2d126 100644
+--- a/isaac_ros-dev/src/line_layer/src/line_layer.cpp
++++ b/isaac_ros-dev/src/line_layer/src/line_layer.cpp
+@@ -41,6 +41,7 @@
+  * https://navigation.ros.org/tutorials/docs/writing_new_costmap2d_plugin.html
+  *********************************************************************/
+ #include "line_layer/line_layer.hpp"
++#include "line_layer/lane_semantics.hpp"
+ 
+ #include "nav2_costmap_2d/costmap_math.hpp"
+ #include "nav2_costmap_2d/footprint.hpp"
+@@ -116,7 +117,24 @@ LineLayer::LineLayer()
+ void
+ LineLayer::onInitialize()
+ {
+-  auto node = node_.lock(); 
++  auto node = node_.lock();
++  declareParameter("lane_dividers", rclcpp::ParameterValue(std::vector<double>{}));
++  declareParameter("lane_hard_boundaries", rclcpp::ParameterValue(std::vector<double>{}));
++  declareParameter("lane_semantics_frame", rclcpp::ParameterValue(std::string("map")));
++  declareParameter("lane_classification_tolerance_m", rclcpp::ParameterValue(.12));
++  declareParameter("quadratic_clearance", rclcpp::ParameterValue(false));
++  declareParameter("clearance_reach_m", rclcpp::ParameterValue(.8));
++  node->get_parameter(name_ + ".lane_dividers", lane_dividers_);
++  node->get_parameter(name_ + ".lane_hard_boundaries", lane_hard_boundaries_);
++  node->get_parameter(name_ + ".lane_semantics_frame", lane_semantics_frame_);
++  node->get_parameter(name_ + ".lane_classification_tolerance_m", lane_classification_tolerance_m_);
++  node->get_parameter(name_ + ".quadratic_clearance", quadratic_clearance_);
++  node->get_parameter(name_ + ".clearance_reach_m", clearance_reach_m_);
++  autonav_lane::segments(lane_dividers_);
++  autonav_lane::segments(lane_hard_boundaries_);
++  if (!std::isfinite(clearance_reach_m_) || clearance_reach_m_ <= 0 ||
++    !std::isfinite(lane_classification_tolerance_m_) || lane_classification_tolerance_m_ <= 0 ||
++    lane_semantics_frame_.empty()) {throw std::invalid_argument("Invalid lane semantics");}
+   declareParameter("enabled", rclcpp::ParameterValue(true));
+   declareParameter("line_topic", rclcpp::ParameterValue("line_points"));
+   declareParameter("costmap_topic", rclcpp::ParameterValue("/line_costmap"));
+@@ -172,6 +190,7 @@ LineLayer::onInitialize()
+   if (inscribed_radius_ > inflation_radius_) {
+     inscribed_radius_ = inflation_radius_;
+   }
++  if (quadratic_clearance_) {inflation_radius_ = inscribed_radius_ + clearance_reach_m_;}
+   observation_persistence_resolution_m_ = std::max(0.01, observation_persistence_resolution_m_);
+   line_clear_range_min_m_ = std::max(0.0, line_clear_range_min_m_);
+   line_clear_range_max_m_ = std::max(line_clear_range_min_m_, line_clear_range_max_m_);
+@@ -290,7 +309,7 @@ std::optional<std::vector<geometry_msgs::msg::Vector3>> LineLayer::transformPoin
+   transformed_points.reserve(message.points.size());
+ 
+   if (message.header.frame_id.empty() || message.header.frame_id == target_frame) {
+-    return message.points;
++    return filterClassifiedDividers(message.points);
+   }
+ 
+   geometry_msgs::msg::TransformStamped transform;
+@@ -335,7 +354,34 @@ std::optional<std::vector<geometry_msgs::msg::Vector3>> LineLayer::transformPoin
+     transformed_points.push_back(transformed);
+   }
+ 
+-  return transformed_points;
++  return filterClassifiedDividers(transformed_points);
++}
++
++std::vector<geometry_msgs::msg::Vector3> LineLayer::filterClassifiedDividers(
++  const std::vector<geometry_msgs::msg::Vector3> & points)
++{
++  if (lane_dividers_.empty()) {return points;}
++  double tx = 0, ty = 0, yaw = 0;
++  const auto global_frame = layered_costmap_->getGlobalFrameID();
++  if (global_frame != lane_semantics_frame_) {
++    try {
++      const auto transform = tf_buffer_->lookupTransform(lane_semantics_frame_, global_frame, tf2::TimePointZero);
++      tx = transform.transform.translation.x;
++      ty = transform.transform.translation.y;
++      yaw = tf2::getYaw(transform.transform.rotation);
++    } catch (const tf2::TransformException &) {
++      return points;  // Uncertain classification stays hard.
++    }
++  }
++  const auto dividers = autonav_lane::segments(lane_dividers_);
++  const auto boundaries = autonav_lane::segments(lane_hard_boundaries_);
++  const double c = std::cos(yaw), s = std::sin(yaw);
++  std::vector<geometry_msgs::msg::Vector3> hard;
++  for (const auto & p : points) {
++    if (!autonav_lane::crossable({tx+c*p.x-s*p.y, ty+s*p.x+c*p.y}, dividers,
++      boundaries, lane_classification_tolerance_m_)) {hard.push_back(p);}
++  }
++  return hard;
+ }
+ 
+ bool LineLayer::hasObservationPersistence() const
+@@ -504,9 +550,9 @@ void LineLayer::buildInflationKernel(double resolution)
+   // sharply that the visible halo was ~0.30 m, not the configured
+   // 0.90 m.
+   const double inscribed = std::max(0.0, inscribed_radius_);
+-  const int radius_cells = static_cast<int>(
+-    std::ceil(inflation_radius_ / resolution));
+-  const double max_dist_sq = inflation_radius_ * inflation_radius_;
++  const double reach = quadratic_clearance_ ? inscribed + clearance_reach_m_ : inflation_radius_;
++  const int radius_cells = static_cast<int>(std::ceil(reach / resolution));
++  const double max_dist_sq = reach * reach;
+   for (int dy = -radius_cells; dy <= radius_cells; ++dy) {
+     for (int dx = -radius_cells; dx <= radius_cells; ++dx) {
+       const double dist_m = std::sqrt(
+@@ -515,7 +561,9 @@ void LineLayer::buildInflationKernel(double resolution)
+         continue;
+       }
+       unsigned char cost;
+-      if (dx == 0 && dy == 0) {
++      if (quadratic_clearance_) {
++        cost = autonav_lane::quadratic_cost(dist_m, inscribed, clearance_reach_m_);
++      } else if (dx == 0 && dy == 0) {
+         cost = LETHAL_OBSTACLE;
+       } else if (dist_m <= inscribed) {
+         cost = INSCRIBED_INFLATED_OBSTACLE;

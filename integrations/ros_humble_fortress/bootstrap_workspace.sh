@@ -55,6 +55,9 @@ clone_pinned https://github.com/ros-navigation/navigation2.git "$NAV2" "$NAV2_SH
 git -C "$NAV2" sparse-checkout add nav2_mppi_controller
 git -C "$NAV2" sparse-checkout add nav2_velocity_smoother
 git -C "$NAV2" sparse-checkout add nav2_controller
+if git -C "$NAV2" apply --reverse --check "$HOST_REPO/integrations/nav2_smac_planner/lane_transition_cost.patch" >/dev/null 2>&1; then
+  git -C "$NAV2" apply --reverse "$HOST_REPO/integrations/nav2_smac_planner/lane_transition_cost.patch"
+fi
 # Return-route memory extends the planner's snapshot overlay. Peel only that
 # exact extension before checking its parents, then restore it below.
 if git -C "$NAV2" apply --reverse --check "$HOST_REPO/integrations/nav2_smac_planner/traveled_corridor.patch" >/dev/null 2>&1; then
@@ -66,6 +69,7 @@ fi
 apply_once "$NAV2" "$HOST_REPO/integrations/nav2_smac_planner/continuous_footprint.patch"
 apply_once "$NAV2" "$HOST_REPO/integrations/nav2_smac_planner/filled_query_shortcut.patch"
 apply_once "$NAV2" "$HOST_REPO/integrations/nav2_smac_planner/traveled_corridor.patch"
+apply_once "$NAV2" "$HOST_REPO/integrations/nav2_smac_planner/lane_transition_cost.patch"
 # Final validation extends the calibrated model header; peel it before
 # checking the complete parent overlay, then restore it below.
 if git -C "$NAV2" apply --reverse --check "$HOST_REPO/integrations/nav2_mppi_controller/final_control_validation.patch" >/dev/null 2>&1; then
@@ -85,6 +89,10 @@ fi
 if git -C "$SIM" apply --reverse --check "$HOST_REPO/integrations/autonav_sim/physics_pose_timestamp.patch" >/dev/null 2>&1; then
   git -C "$SIM" apply --reverse "$HOST_REPO/integrations/autonav_sim/physics_pose_timestamp.patch"
 fi
+# The independent map timer extends the harness's callback-group setup.
+if git -C "$SIM" apply --reverse --check "$HOST_REPO/integrations/autonav_sim/map_timer_isolation.patch" >/dev/null 2>&1; then
+  git -C "$SIM" apply --reverse "$HOST_REPO/integrations/autonav_sim/map_timer_isolation.patch"
+fi
 # Sensor snapshots extend the gyro harness; peel them off before checking it.
 if git -C "$SIM" apply --reverse --check "$HOST_REPO/integrations/autonav_sim/sensor_pose_snapshot.patch" >/dev/null 2>&1; then
   git -C "$SIM" apply --reverse "$HOST_REPO/integrations/autonav_sim/sensor_pose_snapshot.patch"
@@ -95,6 +103,7 @@ if git -C "$SIM" apply --reverse --check "$HOST_REPO/integrations/autonav_sim/ph
 fi
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/validator_robot_profile.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/runner_course_world.patch"
+apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/crossable_dashed_tape.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/mission_runner_fail_safe.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/compact_waypoints.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/ramp_edge_lidar.patch"
@@ -116,9 +125,13 @@ apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/unknown_map_canvas.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/physics_imu.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/lidar_scan_origin.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/sensor_pose_snapshot.patch"
+apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/map_timer_isolation.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/physics_pose_timestamp.patch"
 apply_once "$SIM" "$HOST_REPO/integrations/autonav_sim/obstacle_volume.patch"
 # Peel the full-source snapshot extension before checking older mirror patches.
+if git -C "$ROBOT" apply --reverse --check "$HOST_REPO/integrations/robot/classified_lane_costmap.patch" >/dev/null 2>&1; then
+  git -C "$ROBOT" apply --reverse "$HOST_REPO/integrations/robot/classified_lane_costmap.patch"
+fi
 if git -C "$ROBOT" apply --reverse --check "$HOST_REPO/integrations/robot/mirror_source_snapshot.patch" >/dev/null 2>&1; then
   git -C "$ROBOT" apply --reverse "$HOST_REPO/integrations/robot/mirror_source_snapshot.patch"
 fi
@@ -149,6 +162,7 @@ apply_once "$ROBOT" "$HOST_REPO/integrations/robot/survey_once.patch"
 apply_once "$ROBOT" "$HOST_REPO/integrations/robot/global_line_unknown.patch"
 apply_once "$ROBOT" "$HOST_REPO/integrations/robot/mirror_rolling_origin.patch"
 apply_once "$ROBOT" "$HOST_REPO/integrations/robot/mirror_source_snapshot.patch"
+apply_once "$ROBOT" "$HOST_REPO/integrations/robot/classified_lane_costmap.patch"
 
 set +u
 source /opt/ros/humble/setup.bash

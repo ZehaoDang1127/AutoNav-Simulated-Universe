@@ -1,0 +1,13 @@
+--- a/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
++++ b/igvc_competition_sim/igvc_competition_sim/sensor_harness.py
+@@ -266,7 +266,9 @@
+         )
+         self.create_timer(
+             1.0 / max(0.5, float(self.get_parameter("map_rate_hz").value)),
+             self._publish_map,
+-            callback_group=self.sensor_callback_group,
++            # A busy ray-casting callback must not starve the readiness map.
++            # The unknown canvas has no dependency on the sampled robot pose.
++            callback_group=MutuallyExclusiveCallbackGroup(),
+         )
+         self.create_timer(

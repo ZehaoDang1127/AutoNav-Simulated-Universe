@@ -28,7 +28,10 @@ def git(directory, *args):
 
 
 def verify_repeat(checkout, selected):
-    overlays = [host / 'integrations/robot/gps_arrival_reference.patch',
+    overlays = [host / 'integrations/nav2_smac_planner/lane_transition_cost.patch',
+                host / 'integrations/robot/classified_lane_costmap.patch',
+                host / 'integrations/autonav_sim/map_timer_isolation.patch',
+                host / 'integrations/robot/gps_arrival_reference.patch',
                 host / 'integrations/autonav_sim/ordered_finish.patch',
                 host / 'integrations/nav2_smac_planner/traveled_corridor.patch',
                 host / 'integrations/nav2_smac_planner/filled_query_shortcut.patch',

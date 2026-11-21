@@ -8,6 +8,7 @@ HOST_REPO="${HOST_REPO:-/host}"
 ROS_WS="${ROS_WS:-/ws}"
 RUN_DIR="${RUN_DIR:-$HOST_REPO/runs/compact-ros-smoke}"
 MISSION_TIMEOUT_SEC="${MISSION_TIMEOUT_SEC:-90}"
+export PYTHONPATH="$HOST_REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$RUN_DIR"
 # Snapshot the service-reply discovery window with the run. Ordinary topic
 # QoS keeps the pinned middleware defaults; no XML memory/mode override.
@@ -84,7 +85,12 @@ if [[ "${RECORD_COSTMAP_PROBE:-false}" == "true" ]]; then
   probe_pid=$!
 fi
 
-setsid ros2 launch igvc_competition_sim igvc_competition.launch.py \
+course_launch=(igvc_competition_sim igvc_competition.launch.py)
+if [[ "${DESKTOP_CONTROL:-false}" == "true" ]]; then
+  cp "$HOST_REPO/integrations/ros_humble_fortress/desktop_course.launch.py" "$RUN_DIR/desktop_course.launch.py"
+  course_launch=("$RUN_DIR/desktop_course.launch.py")
+fi
+setsid ros2 launch "${course_launch[@]}" \
   course_config:="$COURSE" \
   world:="$WORLD" \
   line_detection_mode:=lidar \
@@ -122,6 +128,13 @@ fi
 
 set +e
 if [[ "$readiness_status" -eq 0 ]]; then
+if [[ "${DESKTOP_CONTROL:-false}" == "true" ]]; then
+python3 "$HOST_REPO/integrations/ros_humble_fortress/desktop_mission.py" \
+  --course-config "$MISSION_COURSE" --timeout-sec "$MISSION_TIMEOUT_SEC" \
+  --total-timeout-sec "$MISSION_TIMEOUT_SEC" --require-command-gate \
+  2>&1 | tee "$RUN_DIR/mission.log"
+mission_status="${PIPESTATUS[0]}"
+else
 hard_timeout_sec=$((MISSION_TIMEOUT_SEC + 20))
 timeout --signal=TERM --kill-after=8s "${hard_timeout_sec}s" \
   ros2 run igvc_competition_sim igvc_mission_runner \
@@ -131,6 +144,7 @@ timeout --signal=TERM --kill-after=8s "${hard_timeout_sec}s" \
     --require-command-gate \
   2>&1 | tee "$RUN_DIR/mission.log"
 mission_status="${PIPESTATUS[0]}"
+fi
 else
   echo "Mission skipped: startup readiness failed." | tee "$RUN_DIR/mission.log"
   mission_status=2
@@ -154,6 +168,7 @@ python3 "$HOST_REPO/integrations/ros_humble_fortress/run_summary.py" \
   --mission-log "$RUN_DIR/mission.log" \
   --mission-exit "$mission_status" \
   --readiness "$RUN_DIR/readiness.json" \
+  --desktop-status "$RUN_DIR/desktop_status.json" \
   | tee "$RUN_DIR/result.json"
 summary_status="${PIPESTATUS[0]}"
 set -e

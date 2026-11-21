@@ -2,6 +2,7 @@
 """Read-only live course viewer for the compact ROS/Gazebo diagnostic run."""
 
 import argparse
+import base64
 import json
 import math
 import threading
@@ -12,12 +13,14 @@ from pathlib import Path
 import rclpy
 import yaml
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Odometry, Path as NavPath
+from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
 from rclpy._rclpy_pybind11 import RCLError
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from std_msgs.msg import String
+from sensor_msgs.msg import Image, Imu, LaserScan, NavSatFix
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -43,6 +46,10 @@ class ViewerState(Node):
             "map_to_world": None,
             "odom_to_world": None,
             "updated_wall_s": None,
+            "costmap": None,
+            "divider_costmap": None,
+            "self_drive_status": None,
+            "camera_jpeg": None,
         }
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -53,6 +60,20 @@ class ViewerState(Node):
         self.create_subscription(PoseStamped, "/goal_update", self.on_goal_update, 10)
         self.create_subscription(PoseStamped, "/nav_goal", self.on_nav_goal, 10)
         self.create_subscription(NavPath, "/plan", self.on_plan, 10)
+        self.create_subscription(String, "/self_drive/status", self.on_self_drive_status, 10)
+        self.create_subscription(NavPath, "/self_drive/plan", self.on_self_drive_plan, 10)
+        self.sensor_times = {name: None for name in ("LiDAR", "IMU", "GPS", "Local EKF", "Camera")}
+        for topic, kind, name in (("/scan_fullframe", LaserScan, "LiDAR"),
+                                  ("/imu/data", Imu, "IMU"),
+                                  ("/gps_fix", NavSatFix, "GPS"),
+                                  ("/local_ekf/odom", Odometry, "Local EKF")):
+            self.create_subscription(kind, topic, lambda msg, label=name: self.on_sensor(label),
+                                     qos_profile_sensor_data)
+        self.create_subscription(OccupancyGrid, "/local_costmap/costmap", self.on_costmap, 1)
+        self.create_subscription(OccupancyGrid, "/self_drive/divider_costmap", self.on_divider_costmap, 1)
+        self.create_subscription(Image, "/zed/zed_node/rgb/color/rect/image", self.on_image,
+                                 qos_profile_sensor_data)
+        self.last_image_wall = 0.0
         self.create_timer(0.2, self.update_map_alignment)
 
     def on_odom(self, msg: Odometry) -> None:
@@ -107,6 +128,79 @@ class ViewerState(Node):
             self.data["plan"] = [[p.pose.position.x, p.pose.position.y]
                                  for p in points[::stride]]
 
+    def on_self_drive_plan(self, msg: NavPath) -> None:
+        with self.lock:
+            self.data["self_drive_plan_frame"] = msg.header.frame_id
+            self.data["self_drive_plan"] = [[p.pose.position.x, p.pose.position.y]
+                                            for p in msg.poses]
+
+    def on_sensor(self, name):
+        with self.lock:
+            self.sensor_times[name] = time.monotonic()
+
+    def on_self_drive_status(self, msg):
+        try:
+            status = json.loads(msg.data)
+        except (ValueError, TypeError):
+            return
+        with self.lock:
+            self.data["self_drive_status"] = status
+
+    def on_costmap(self, msg: OccupancyGrid):
+        stride = max(1, math.ceil(max(msg.info.width, msg.info.height) / 180))
+        columns, rows = range(0, msg.info.width, stride), range(0, msg.info.height, stride)
+        origin = msg.info.origin
+        q = origin.orientation
+        origin_yaw = math.atan2(2 * (q.w*q.z + q.x*q.y), 1 - 2 * (q.y*q.y + q.z*q.z))
+        grid = {"width": len(columns), "height": len(rows), "frame": msg.header.frame_id,
+                "stamp_s": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
+                "resolution_m": msg.info.resolution * stride,
+                "origin": [origin.position.x, origin.position.y, origin_yaw],
+                "stamp": [msg.header.stamp.sec, msg.header.stamp.nanosec],
+                "received_wall_s": time.time(),
+                "data": [int(msg.data[y * msg.info.width + x]) for y in rows for x in columns]}
+        try:
+            transform = self.tf_buffer.lookup_transform(msg.header.frame_id, "base_link", Time())
+            t, q = transform.transform.translation, transform.transform.rotation
+            grid["robot_pose"] = [t.x, t.y, math.atan2(2*(q.w*q.z+q.x*q.y),
+                                                       1-2*(q.y*q.y+q.z*q.z))]
+        except TransformException:
+            grid["robot_pose"] = None
+        if grid["width"] and grid["height"]:
+            with self.lock:
+                self.data["costmap"] = grid
+
+    def on_divider_costmap(self, msg: OccupancyGrid):
+        stride = max(1, math.ceil(max(msg.info.width, msg.info.height) / 180))
+        columns, rows = range(0, msg.info.width, stride), range(0, msg.info.height, stride)
+        origin = msg.info.origin
+        q = origin.orientation
+        grid = {"width": len(columns), "height": len(rows), "frame": msg.header.frame_id,
+                "resolution_m": msg.info.resolution * stride,
+                "origin": [origin.position.x, origin.position.y,
+                           math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))],
+                "received_wall_s": time.time(),
+                "data": [int(msg.data[y*msg.info.width+x]) for y in rows for x in columns]}
+        with self.lock:
+            self.data["divider_costmap"] = grid
+
+    def on_image(self, msg: Image):
+        self.on_sensor("Camera")
+        if time.monotonic() - self.last_image_wall < 1:
+            return
+        self.last_image_wall = time.monotonic()
+        try:
+            import cv2
+            from cv_bridge import CvBridge
+            frame = CvBridge().imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            frame = cv2.resize(frame, (320, 180))
+            ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                with self.lock:
+                    self.data["camera_jpeg"] = base64.b64encode(encoded).decode("ascii")
+        except Exception as exc:
+            self.get_logger().debug(f"Camera preview unavailable: {exc}")
+
     def update_map_alignment(self) -> None:
         with self.lock:
             truth = self.data["pose"]
@@ -131,6 +225,9 @@ class ViewerState(Node):
 
     def snapshot(self) -> bytes:
         with self.lock:
+            now = time.monotonic()
+            self.data["sensors"] = {name: {"age_s": None if stamp is None else round(now-stamp, 2)}
+                                    for name, stamp in self.sensor_times.items()}
             return json.dumps(self.data, separators=(",", ":")).encode("utf-8")
 
 

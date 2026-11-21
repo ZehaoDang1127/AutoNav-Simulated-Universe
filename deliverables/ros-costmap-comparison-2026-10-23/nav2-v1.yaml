@@ -1,0 +1,592 @@
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: odom
+    robot_base_frame: base_link
+    odom_topic: /local_ekf/odom
+    bt_loop_duration: 50
+    default_server_timeout: 1000
+    wait_for_service_timeout: 1000
+    default_nav_to_pose_bt_xml: /autonav/isaac_ros-dev/src/slam/behavior_trees/bt_nav.xml
+    default_nav_through_poses_bt_xml: /autonav/isaac_ros-dev/src/slam/behavior_trees/bt_nav.xml
+    path_significantly_changed.rms_threshold_m: 0.15
+    path_significantly_changed.compare_n_poses: 20
+    path_significantly_changed.max_point_delta_m: 0.3
+    path_significantly_changed.start_delta_threshold_m: 0.25
+    path_significantly_changed.length_delta_threshold_m: 0.5
+    path_significantly_changed.force_update_period_s: 0.5
+    path_significantly_changed.empty_path_hold_period_s: 1.0
+    path_significantly_changed.preserve_shorter_route: true
+    path_significantly_changed.route_length_margin_m: 0.5
+    path_significantly_changed.route_deviation_limit_m: 0.3
+    plugin_lib_names:
+    - nav2_compute_path_to_pose_action_bt_node
+    - nav2_compute_path_through_poses_action_bt_node
+    - nav2_smooth_path_action_bt_node
+    - nav2_follow_path_action_bt_node
+    - nav2_spin_action_bt_node
+    - nav2_wait_action_bt_node
+    - nav2_assisted_teleop_action_bt_node
+    - nav2_back_up_action_bt_node
+    - nav2_drive_on_heading_bt_node
+    - nav2_clear_costmap_service_bt_node
+    - nav2_is_stuck_condition_bt_node
+    - nav2_goal_reached_condition_bt_node
+    - nav2_goal_updated_condition_bt_node
+    - nav2_globally_updated_goal_condition_bt_node
+    - nav2_is_path_valid_condition_bt_node
+    - nav2_initial_pose_received_condition_bt_node
+    - nav2_reinitialize_global_localization_service_bt_node
+    - nav2_rate_controller_bt_node
+    - nav2_distance_controller_bt_node
+    - nav2_speed_controller_bt_node
+    - nav2_truncate_path_action_bt_node
+    - nav2_truncate_path_local_action_bt_node
+    - nav2_goal_updater_node_bt_node
+    - nav2_recovery_node_bt_node
+    - nav2_pipeline_sequence_bt_node
+    - nav2_round_robin_node_bt_node
+    - nav2_transform_available_condition_bt_node
+    - nav2_time_expired_condition_bt_node
+    - nav2_path_expiring_timer_condition
+    - nav2_distance_traveled_condition_bt_node
+    - nav2_single_trigger_bt_node
+    - nav2_goal_updated_controller_bt_node
+    - nav2_is_battery_low_condition_bt_node
+    - nav2_navigate_through_poses_action_bt_node
+    - nav2_navigate_to_pose_action_bt_node
+    - nav2_remove_passed_goals_action_bt_node
+    - nav2_planner_selector_bt_node
+    - nav2_controller_selector_bt_node
+    - nav2_goal_checker_selector_bt_node
+    - nav2_controller_cancel_bt_node
+    - nav2_path_longer_on_approach_bt_node
+    - nav2_wait_cancel_bt_node
+    - nav2_spin_cancel_bt_node
+    - nav2_back_up_cancel_bt_node
+    - nav2_assisted_teleop_cancel_bt_node
+    - nav2_drive_on_heading_cancel_bt_node
+    - nav2_is_battery_charging_condition_bt_node
+    - autonav_goal_bender_bt_node
+    - autonav_path_significantly_changed_bt_node
+    - autonav_is_forward_blocked_bt_node
+    - autonav_path_footprint_safe_bt_node
+bt_navigator_navigate_through_poses_rclcpp_node:
+  ros__parameters:
+    use_sim_time: true
+bt_navigator_navigate_to_pose_rclcpp_node:
+  ros__parameters:
+    use_sim_time: true
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 10.0
+    odom_topic: /local_ekf/odom
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.0
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 8.0
+    progress_checker_plugin: progress_checker
+    goal_checker_plugins:
+    - general_goal_checker
+    controller_plugins:
+    - FollowPath
+    progress_checker:
+      plugin: nav2_controller::SimpleProgressChecker
+      required_movement_radius: 0.03
+      movement_time_allowance: 45.0
+    general_goal_checker:
+      stateful: true
+      plugin: nav2_controller::SimpleGoalChecker
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 6.28319
+    FollowPath:
+      plugin: nav2_mppi_controller::MPPIController
+      time_steps: 28
+      model_dt: 0.1
+      batch_size: 1200
+      vx_std: 0.25
+      vy_std: 0.01
+      wz_std: 0.7
+      vx_max: 0.5
+      vx_min: 0.0
+      vy_max: 0.0
+      wz_max: 1.0
+      iteration_count: 1
+      prune_distance: 2.0
+      enforce_path_inversion: false
+      transform_tolerance: 0.5
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: CalibratedDiffDrive
+      command_feedback_topic: /cmd_vel_supervised
+      command_smoothing_frequency: 20.0
+      CalibratedDiffDrive:
+        command_latency_s: 0.08
+        linear_time_constant_s: 0.2
+        angular_time_constant_s: 0.18
+        max_linear_acceleration_mps2: 1.0
+        max_angular_acceleration_radps2: 2.0
+      visualize: false
+      retry_attempt_limit: 5
+      reset_period: 1.0
+      regenerate_noises: false
+      TrajectoryVisualizer:
+        trajectory_step: 8
+        time_step: 4
+      critics:
+      - ConstraintCritic
+      - FilledCostCritic
+      - GoalCritic
+      - GoalAngleCritic
+      - PathAlignCritic
+      - PathFollowCritic
+      - PathAngleCritic
+      - PreferForwardCritic
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.2
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 10.0
+        threshold_to_consider: 0.5
+      FilledCostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 1.6
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 0.6
+        rollout_footprint_margin: 0.15
+        rollout_clearance_cost: 500.0
+        inflation_layer_name: inflation_layer
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 12.0
+        max_path_occupancy_ratio: 0.12
+        trajectory_point_step: 2
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        offset_from_furthest: 4
+        threshold_to_consider: 1.2
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 6.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 0.0
+        forward_preference: true
+        consider_lattice_rotations: true
+        lattice_rotation_min_angle: 0.3
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 20.0
+      publish_frequency: 20.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: true
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      footprint: '[ [0.77, 0.41], [0.77, -0.41], [-0.32, -0.41], [-0.32, 0.41] ]'
+      footprint_padding: 0.1
+      plugins:
+      - obstacle_layer
+      - line_layer
+      - lidar_line_layer
+      - global_memory_layer
+      - inflation_layer
+      global_memory_layer:
+        plugin: local_mirror_layer::LocalMirrorLayer
+        enabled: true
+        retain_source_history: false
+        source_topic: /global_costmap/costmap
+        min_occupied_value_to_mirror: 100
+        allow_decrease: true
+        decrease_only_in_front: false
+        track_unknown_space: true
+      obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        footprint_clearing_enabled: false
+        observation_sources: mark_scan clear_scan
+        mark_scan:
+          topic: /scan_pca_obstacle_volume_points
+          observation_persistence: 0.0
+          marking: true
+          clearing: false
+          data_type: PointCloud2
+          inf_is_valid: false
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.0
+          raytrace_min_range: 0.0
+        clear_scan:
+          topic: /scan_pca_filtered_clear
+          observation_persistence: 0.0
+          marking: false
+          clearing: true
+          data_type: LaserScan
+          inf_is_valid: true
+          raytrace_max_range: 25.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 0.0
+          obstacle_min_range: 0.0
+      line_layer:
+        plugin: line_layer::LineLayer
+        enabled: true
+        line_topic: /line_points
+        costmap_topic: /line_costmap
+        transform_tolerance: 0.5
+        max_message_age_ms: 750
+        observation_persistence_ms: 3000
+        observation_persistence_resolution_m: 0.1
+        clear_lines_only_in_view: true
+        line_clear_angle_min_rad: -0.4
+        line_clear_angle_max_rad: 0.4
+        line_clear_range_min_m: 0.4
+        line_clear_range_max_m: 4.5
+        max_persisted_points: 12000
+        inflation_radius: 0.6
+        inscribed_radius: 0.02
+        cost_scaling_factor: 1.0
+        clearing: true
+        rolling_window: true
+        publish_costmap: true
+      lidar_line_layer:
+        plugin: line_layer::LineLayer
+        enabled: true
+        line_topic: /lidar_line_points
+        clearing_frame: lidar_planar
+        costmap_topic: /lidar_line_costmap
+        transform_tolerance: 0.5
+        max_message_age_ms: 750
+        observation_persistence_ms: 5000
+        observation_persistence_resolution_m: 0.1
+        clear_lines_only_in_view: true
+        line_clear_angle_min_rad: -0.95
+        line_clear_angle_max_rad: 0.95
+        line_clear_range_min_m: 0.2
+        line_clear_range_max_m: 6.0
+        max_persisted_points: 2000
+        inflation_radius: 0.6
+        inscribed_radius: 0.05
+        cost_scaling_factor: 1.0
+        clearing: true
+        rolling_window: true
+        publish_costmap: true
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        cost_scaling_factor: 3.2
+        inflation_radius: 1.15
+      always_send_full_costmap: true
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 3.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: true
+      footprint: '[ [0.77, 0.41], [0.77, -0.41], [-0.32, -0.41], [-0.32, 0.41] ]'
+      footprint_padding: 0.1
+      resolution: 0.05
+      width: 6
+      height: 6
+      origin_x: -3.0
+      origin_y: -3.0
+      track_unknown_space: true
+      plugins:
+      - static_layer
+      - far_obstacle_layer
+      - exploration_layer
+      - camera_line_layer
+      - lidar_line_layer
+      - inflation_layer
+      static_layer:
+        plugin: nav2_costmap_2d::StaticLayer
+        map_subscribe_transient_local: true
+        map_topic: /map_padded
+        first_map_only: false
+        trinary_costmap: false
+        unknown_cost_value: -1
+      far_obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        footprint_clearing_enabled: false
+        observation_sources: mark_scan clear_scan
+        mark_scan:
+          topic: /scan_pca_obstacle_volume_points
+          observation_persistence: 0.0
+          marking: true
+          clearing: false
+          data_type: PointCloud2
+          inf_is_valid: false
+          obstacle_max_range: 8.0
+          obstacle_min_range: 0.3
+        clear_scan:
+          topic: /scan_pca_filtered_clear
+          observation_persistence: 0.0
+          marking: false
+          clearing: true
+          data_type: LaserScan
+          inf_is_valid: true
+          raytrace_max_range: 6.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 0.0
+      camera_line_layer:
+        plugin: line_layer::LineLayer
+        enabled: true
+        line_topic: /line_points
+        transform_tolerance: 0.5
+        max_message_age_ms: 750
+        observation_persistence_ms: 3000
+        observation_persistence_resolution_m: 0.1
+        clear_lines_only_in_view: true
+        line_clear_angle_min_rad: -0.4
+        line_clear_angle_max_rad: 0.4
+        line_clear_range_min_m: 0.4
+        line_clear_range_max_m: 4.5
+        max_persisted_points: 12000
+        inflation_radius: 0.6
+        inscribed_radius: 0.02
+        cost_scaling_factor: 1.0
+        clearing: true
+        rolling_window: false
+        publish_costmap: false
+        preserve_unknown_space: true
+      lidar_line_layer:
+        plugin: line_layer::LineLayer
+        enabled: true
+        line_topic: /lidar_line_points
+        clearing_frame: lidar_planar
+        transform_tolerance: 0.5
+        max_message_age_ms: 750
+        observation_persistence_ms: 5000
+        observation_persistence_resolution_m: 0.1
+        clear_lines_only_in_view: true
+        line_clear_angle_min_rad: -0.95
+        line_clear_angle_max_rad: 0.95
+        line_clear_range_min_m: 0.2
+        line_clear_range_max_m: 6.0
+        max_persisted_points: 12000
+        inflation_radius: 0.6
+        inscribed_radius: 0.05
+        cost_scaling_factor: 1.0
+        clearing: true
+        rolling_window: false
+        publish_costmap: false
+        preserve_unknown_space: true
+      exploration_layer:
+        plugin: local_mirror_layer::LocalMirrorLayer
+        enabled: true
+        source_topic: /map_padded
+        mirror_free_space: false
+        unknown_space_cost: 200
+        min_occupied_value_to_mirror: 100
+        track_unknown_space: true
+      line_memory_mirror_layer:
+        plugin: local_mirror_layer::LocalMirrorLayer
+        enabled: true
+        source_topic: /line_costmap
+        min_occupied_value_to_mirror: 1
+        allow_decrease: true
+        decrease_only_in_front: true
+        decrease_nonzero_outside_view: true
+        decrease_angle_min_rad: -0.4
+        decrease_angle_max_rad: 0.4
+        decrease_range_min_m: 0.4
+        decrease_range_max_m: 4.5
+        track_unknown_space: true
+      lidar_line_memory_mirror_layer:
+        plugin: local_mirror_layer::LocalMirrorLayer
+        enabled: true
+        source_topic: /lidar_line_costmap
+        min_occupied_value_to_mirror: 1
+        allow_decrease: true
+        decrease_only_in_front: true
+        decrease_nonzero_outside_view: true
+        decrease_angle_min_rad: -0.95
+        decrease_angle_max_rad: 0.95
+        decrease_range_min_m: 0.2
+        decrease_range_max_m: 6.0
+        track_unknown_space: true
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        cost_scaling_factor: 3.2
+        inflation_radius: 1.25
+      always_send_full_costmap: true
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    yaml_filename: ''
+map_saver:
+  ros__parameters:
+    use_sim_time: true
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: true
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 5.0
+    use_sim_time: true
+    planner_plugins:
+    - GridBased
+    GridBased:
+      plugin: nav2_smac_planner/SmacPlannerLattice
+      tolerance: 0.35
+      allow_unknown: true
+      max_iterations: 5000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 20.0
+      lattice_filepath: /opt/ros/humble/share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json
+      cost_penalty: 4.0
+      rotation_penalty: 5.0
+      allow_reverse_expansion: false
+      allow_goal_heading_change: true
+      prefer_traveled_return: true
+      traveled_odom_topic: /global_ekf/odom
+      traveled_corridor_radius: 3.5
+      revisit_goal_distance: 1.5
+      revisit_minimum_travel: 20.0
+smoother_server:
+  ros__parameters:
+    use_sim_time: true
+    smoother_plugins:
+    - simple_smoother
+    simple_smoother:
+      plugin: nav2_smoother::SimpleSmoother
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    cycle_frequency: 10.0
+    behavior_plugins:
+    - spin
+    - backup
+    - drive_on_heading
+    - assisted_teleop
+    - wait
+    - wait_plan
+    - wait_controller
+    - gradient_escape
+    - breadcrumb_reverse
+    spin:
+      plugin: nav2_behaviors/Spin
+    backup:
+      plugin: nav2_behaviors/BackUp
+    drive_on_heading:
+      plugin: nav2_behaviors/DriveOnHeading
+    wait:
+      plugin: nav2_behaviors/Wait
+    wait_plan:
+      plugin: nav2_behaviors/Wait
+    wait_controller:
+      plugin: nav2_behaviors/Wait
+    assisted_teleop:
+      plugin: nav2_behaviors/AssistedTeleop
+    gradient_escape:
+      plugin: gradient_escape::GradientEscape
+    breadcrumb_reverse:
+      plugin: breadcrumb::BreadcrumbReverse
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    use_sim_time: true
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+    gradient_escape.escape_speed: 0.1
+    gradient_escape.cost_threshold: 200.0
+    gradient_escape.sample_radius: 0.8
+    gradient_escape.num_samples: 16
+    gradient_escape.timeout: 15.0
+    breadcrumb_reverse.reverse_speed: 0.1
+    breadcrumb_reverse.max_angular_speed: 0.5
+    breadcrumb_reverse.arrival_tolerance_m: 0.05
+    breadcrumb_reverse.lethal_cost_threshold: 253.0
+    breadcrumb_reverse.timeout: 5.0
+    breadcrumb_reverse.breadcrumb_topic: /breadcrumb_tail
+    breadcrumb_reverse.global_costmap_topic: global_costmap/costmap_raw
+    breadcrumb_reverse.max_crumbs_per_session: 15
+    breadcrumb_reverse.session_reset_s: 2.0
+    breadcrumb_reverse.bonus_crumb_after_forward: true
+    breadcrumb_reverse.forward_threshold_deg: 60.0
+    breadcrumb_reverse.min_lookahead_m: 0.6
+    breadcrumb_reverse.plan_topic: /plan
+breadcrumb_buffer:
+  ros__parameters:
+    stride_m: 0.1
+    buffer_size: 10
+    min_forward_vx: 0.05
+    consume_tolerance_m: 0.05
+    odom_frame: odom
+    odom_topic: /local_ekf/odom
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: true
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: true
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: wait_at_waypoint
+    wait_at_waypoint:
+      plugin: nav2_waypoint_follower::WaitAtWaypoint
+      enabled: true
+      waypoint_pause_duration: 200
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: true
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: OPEN_LOOP
+    max_velocity:
+    - 0.5
+    - 0.0
+    - 1.0
+    min_velocity:
+    - -0.25
+    - 0.0
+    - -1.0
+    max_accel:
+    - 1.0
+    - 0.0
+    - 2.0
+    max_decel:
+    - -1.0
+    - 0.0
+    - -2.0
+    odom_topic: /local_ekf/odom
+    odom_duration: 0.1
+    deadband_velocity:
+    - 0.0
+    - 0.0
+    - 0.0
+    velocity_timeout: 1.0

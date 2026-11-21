@@ -21,9 +21,15 @@ class GateState:
     last_command_s: float = -math.inf
     linear_mps: float = 0.0
     angular_radps: float = 0.0
+    interlock: bool = True
+
+    def set_interlock(self, permitted: bool, now_s: float) -> None:
+        self.interlock = permitted
+        if not permitted:
+            self.set_enable(False, now_s)
 
     def set_enable(self, enabled: bool, now_s: float) -> None:
-        if self.failed or not enabled:
+        if self.failed or not enabled or not self.interlock:
             self.enabled = False
             self.linear_mps = 0.0
             self.angular_radps = 0.0
@@ -48,7 +54,7 @@ class GateState:
             self.enabled = False
 
     def output(self, now_s: float) -> tuple[float, float]:
-        if (self.failed or not self.enabled
+        if (self.failed or not self.enabled or not self.interlock
                 or now_s - self.last_heartbeat_s > self.heartbeat_timeout_s):
             self.enabled = False
             self.linear_mps = 0.0
@@ -61,6 +67,8 @@ class GateState:
 
 
 def main() -> None:
+    import os
+    from pathlib import Path
     import rclpy
     from geometry_msgs.msg import Twist
     from rclpy.clock import Clock, ClockType
@@ -72,6 +80,14 @@ def main() -> None:
         def __init__(self) -> None:
             super().__init__("full_track_command_gate")
             self.state = GateState()
+            self.desktop_lease = None
+            self.auto_pub = None
+            if os.environ.get("DESKTOP_CONTROL") == "true":
+                from autonav_universe.full_track import ControlLease
+                self.desktop_lease = ControlLease()
+                self.state.interlock = False
+                self.control_path = Path(os.environ["RUN_DIR"]) / "desktop_control.json"
+                self.auto_pub = self.create_publisher(Bool, "/autonomous_mode", 1)
             self.output_pub = self.create_publisher(
                 Twist, "/cmd_vel_supervised", 10)
             self.create_subscription(
@@ -91,11 +107,18 @@ def main() -> None:
                 clock=Clock(clock_type=ClockType.STEADY_TIME))
 
         def tick(self) -> None:
+            if self.desktop_lease is not None:
+                from autonav_universe.full_track import read_json
+                now = time.monotonic()
+                desired = self.desktop_lease.update(read_json(self.control_path), now)
+                self.state.set_interlock(desired == "running", now)
             linear, angular = self.state.output(time.monotonic())
             msg = Twist()
             msg.linear.x = linear
             msg.angular.z = angular
             self.output_pub.publish(msg)
+            if self.auto_pub is not None:
+                self.auto_pub.publish(Bool(data=self.state.enabled and not self.state.failed))
 
     rclpy.init()
     node = CommandGate()

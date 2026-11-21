@@ -211,7 +211,15 @@ def _compare(left: Path, right: Path, output: Path | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="autonav-universe")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("app", help="open interactive Qt application")
+    lane_demo = commands.add_parser("lane-costmap-demo", help="illustrate the lane-aware v2 planner")
+    lane_demo.add_argument("--output", type=Path, default=Path("runs/lane-costmap-v2"))
+    lane_demo.add_argument("--case", choices=("sketch", "optional", "clear"), default="sketch")
+    lane_demo.add_argument("--lane-change-cost", type=float, default=0.25, metavar="METRES")
+    commands.add_parser("self-drive", help="open the waypoint-free ROS self-drive track")
+    app = commands.add_parser("app", help="open the full-course Qt workspace")
+    app.add_argument("--backend", choices=("full-course", "python"), default="full-course")
+    app.add_argument("--repo", type=Path, help="repository containing the ROS integration")
+    app.add_argument("--bundle", type=Path, help="exported course/world bundle directory")
     validate = commands.add_parser("validate-plugin")
     validate.add_argument("--algorithm", required=True)
     validate.add_argument("--scenario", default="straight")
@@ -243,9 +251,23 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("--gui", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.command == "self-drive":
+            from .self_drive_ui import launch_self_drive_app
+            launch_self_drive_app()
+            return 0
+        if args.command == "lane-costmap-demo":
+            from .lane_demo import write_demo
+            result = write_demo(args.output, args.case, args.lane_change_cost)
+            print(json.dumps({"output": str(args.output.resolve()),
+                              "plan": {k: v for k, v in result["plan"].items() if k != "points"}}))
+            return 0 if result["plan"]["status"] == "ok" else 1
         if args.command == "app":
-            from .ui import launch_app
-            launch_app()
+            if args.backend == "python":
+                from .ui import launch_app
+                launch_app()
+            else:
+                from .full_track_ui import launch_full_track_app
+                launch_full_track_app(args.repo, args.bundle)
             return 0
         if args.command == "validate-plugin":
             scenario = load_scenario(args.scenario)

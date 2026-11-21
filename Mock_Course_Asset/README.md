@@ -29,6 +29,7 @@ git clone --filter=blob:none --no-checkout https://github.com/blobspire/autonav_
 git -C runs/upstream-autonav-sim checkout --detach 46b8e9aa953160b2d317fcc811e209fed46a52f4
 git -C runs/upstream-autonav-sim apply ../../integrations/autonav_sim/validator_robot_profile.patch
 git -C runs/upstream-autonav-sim apply ../../integrations/autonav_sim/runner_course_world.patch
+git -C runs/upstream-autonav-sim apply ../../integrations/autonav_sim/crossable_dashed_tape.patch
 # Python requirements for the upstream validator: numpy, scipy, PyYAML.
 blender -b Mock_Course_Asset/Course.blend --python tools/export_course.py -- runs/course-export
 blender -b Mock_Course_Asset/Course.blend --python tools/render_course_overview.py -- runs/course-export/overview.png
@@ -39,7 +40,7 @@ python -m tools.prepare_full_track \
   --course-yaml runs/course-export/course.yaml \
   --semantics Mock_Course_Asset/course_semantics.json \
   --sim-package runs/upstream-autonav-sim/igvc_competition_sim \
-  --output runs/full-track-diagnostic
+  --output runs/full-track-integrated-lanes
 ```
 
 The upstream checkout path in this example is a local, ignored directory.
@@ -49,6 +50,23 @@ writes `course.yaml`, `world.sdf`, `public_mission.json`, and
 `course_manifest.json` from one diagnostic source. It does not pass the asset
 gate while required features are missing. Use `--require-complete-assets` in
 automation to get a nonzero exit code until the asset has all required roles.
+
+The semantic overlay adds a crossable dashed divider that follows the existing
+marked track through the obstacle course, including its open right-hand section.
+The existing Blender tape remains hard, and the cones remain obstacles even
+where they overlap divider paint. The generated paint uses 0.75 m dashes and
+0.45 m gaps. It is included in the course YAML and SDF and is not a Blender
+source mesh. The generated bundle and manifest include the overlay in their
+hashes. The v2 profile classifies this paint as crossable and scores transitions
+across its centreline, including through gaps. The simulator referee honors the
+explicit `allow_crossing` flag after `setup.cmd` rebuilds the workspace; all
+other tape remains a contact failure. Existing exported bundles need to be
+regenerated.
+
+The course was not designed as a two-lane road: parts of the marked corridor
+are narrower than two robot widths, and the right-hand obstacle area has gaps in
+its outer boundaries. Lane following and crossing behavior require ROS/Gazebo
+validation; the overlay does not establish either.
 
 The generated SDF uses the simulator's semantic world models. The GLB from
 `export_course.py` is an inventory/visual artifact; it is not itself a Gazebo

@@ -3,7 +3,8 @@
 This directory contains reproducible **diagnostic compact and full local-course** runs.
 It builds the pinned simulator and robot sources in a Docker volume and leaves
 the repository's Python prototype intact. It is a bring-up stage of
-`FULL_TRACK_AUTONAV_PLAN.md`, not the delivered full-track application.
+`FULL_TRACK_AUTONAV_PLAN.md`. The [Qt workspace](#full-course-qt-workspace)
+now controls this backend; release acceptance remains separate.
 
 ## Windows setup
 
@@ -66,10 +67,14 @@ After setup and the export described in `Mock_Course_Asset/README.md`, run:
 .\integrations\ros_humble_fortress\run_full_track.cmd 900
 ```
 
-This selects `runs/full-track-diagnostic/course.yaml` and its matching
+This selects `runs/full-track-integrated-lanes/course.yaml` and its matching
 `world.sdf`: the full exported local Blender scene, with 73 cones, 872 tape
-segments, one ramp, and all five exported GPS markers. It checks the source,
-course, and world hashes and the geometry-check result before starting Gazebo.
+segments, one ramp, and all five exported GPS markers. The diagnostic overlay
+adds a dashed divider through the existing obstacle course. Original tape
+remains hard and cones remain obstacles. Some sections are too narrow for two
+robot widths and the right-hand boundaries have gaps; lane following has not
+been validated. The launcher checks the source, course, and world hashes and
+the geometry-check result before starting Gazebo.
 The mission has a 900-second wall-time limit. Each invocation writes to a fresh
 timestamped run directory, records a rosbag and costmap diagnostics, and opens
 the live course view and saved replay. For an explicitly named headless run:
@@ -547,3 +552,73 @@ exported local `Course.blend` scene. That asset still lacks required semantic
 features and fails the semantic release gate. See
 `FULL_TRACK_IMPLEMENTATION_STATUS.md` for the latest observed run outcome and
 remaining acceptance gates.
+
+## Full-course Qt workspace
+
+The full-course Session panel now selects the previous v1 map or lane-aware
+v2. V2 requires rebuilding the pinned workspace, and its launcher rejects
+missing/stale lane-patch hashes. Existing Blender boundary tape remains hard;
+the integrated diagnostic divider is explicitly classified as crossable. See the [ROS lane-costmap guide](../../docs/ros-lane-costmap.md)
+and [comparison report](../../deliverables/ros-costmap-comparison-2026-10-23/comparison.md).
+Native ROS compilation and paired Gazebo validation remain pending.
+
+From the repository root, install the GUI extra and open the desktop workspace:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[gui]"
+.\Run_Full_Course.cmd
+# Equivalent:
+.\.venv\Scripts\autonav-universe.exe app
+```
+
+The default workspace previews `runs/full-track-integrated-lanes/course.yaml` after
+checking its source, world and manifest hashes. Choose a different exported
+bundle in the Session panel or pass `app --bundle PATH`. The bundle must be
+inside the repository so Docker can mount the same inputs. `--repo PATH`
+selects another repository checkout. Generate missing bundles using
+[the asset instructions](../../Mock_Course_Asset/README.md). Preview and saved
+results work without Docker; Run requires Docker Desktop's Linux engine,
+GPU access, the pinned image and the built workspace volume described above.
+
+The desktop defaults to a 1,800-second active wall-time mission budget to
+allow the full course to finish on this Windows/Docker host. Pause time does
+not consume that budget; the Session panel can change it before Run.
+Run starts a fresh container, waits for the existing ROS readiness checks,
+then submits the ordered course mission once. The course view follows actual
+ROS telemetry, including the robot, trail, planned path, referee progress,
+simulation time, distance and speed. Ground truth is labeled as evaluator
+data. Sensor health, the estimated local costmap, runtime logs and received
+camera images have separate panels. Missing camera data stays unavailable.
+Saved results list previous course runs; double-click a row for its replay.
+The original viewer remains in the Python scenario lab tab or through
+`app --backend python`.
+
+Pause inhibits the velocity gate and waits for Gazebo to acknowledge frozen
+physics. Resume restores physics and excludes the pause from mission wall
+budgets. Stop cancels the active goal, inhibits motion and retains the result
+bundle. Reset stops an active session; the next Run creates a new container,
+clearing localization, maps, command queues, mission and referee state.
+Closing the window requests Stop and waits for cleanup. Each desktop Run
+saves `desktop_session.json`, `desktop_events.jsonl`, `desktop_status.json`,
+`desktop_host_result.json` and the normal result, bag, replay and input files
+under a unique `runs/full-track-app-*` directory.
+
+The desktop renews a control-file lease every 250 ms. The steady-clock gate
+checks it independently; a lost lease latches Stop after two seconds. Invalid
+or repeated heartbeats cannot extend that lease. Resume needs fresh commands.
+Desktop sessions remap only the sensor harness's legacy AUTO publisher;
+the gate is the sole publisher of `/autonomous_mode`. A separate mission
+watchdog stops on stale LiDAR, IMU, GPS, local localization or simulation clock.
+The existing command-line diagnostic launchers keep their original behavior.
+
+This is the local diagnostic course. Authored asset gaps, full sensor fidelity
+and release repeatability remain separate acceptance requirements. The UI
+does not mark the current asset release-ready.
+
+To run the opt-in lifecycle check from the host:
+
+```powershell
+.\.venv\Scripts\python.exe tools/check_desktop_session.py
+# Include autonomous completion of the diagnostic course:
+.\.venv\Scripts\python.exe tools/check_desktop_session.py --complete-course --timeout 1800
+```

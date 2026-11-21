@@ -1,0 +1,29 @@
+--- a/igvc_competition_sim/igvc_competition_sim/course.py
++++ b/igvc_competition_sim/igvc_competition_sim/course.py
+@@ -42,6 +42,7 @@
+     start: tuple[float, float]
+     end: tuple[float, float]
+     width_m: float
++    crossable: bool = False
+ 
+ 
+ @dataclass(frozen=True)
+@@ -655,6 +656,7 @@
+                 end=(start[0] + ux * (offset + seg_len),
+                      start[1] + uy * (offset + seg_len)),
+                 width_m=width,
++                crossable=raw.get("allow_crossing") is True,
+             ))
+             idx += 1
+         offset += dash + gap
+--- a/igvc_competition_sim/igvc_competition_sim/course_monitor.py
++++ b/igvc_competition_sim/igvc_competition_sim/course_monitor.py
+@@ -428,6 +428,8 @@
+         hy = self.robot.physical_half_width_m + self.robot.footprint_padding_m
+ 
+         for tape in self.course.tapes:
++            if tape.crossable:
++                continue
+             if self._segment_hits_body(
+                     tape.start, tape.end, tape.width_m * 0.5,
+                     nav_x, nav_y, yaw, hx, hy):

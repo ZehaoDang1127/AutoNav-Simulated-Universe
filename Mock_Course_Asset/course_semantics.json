@@ -3,10 +3,20 @@
   "course_id": "local_mock_course",
   "source_sha256": "789f974d627bccf5f48579a350223462d23d76fa9645954fa5edc27c7b33380d",
   "start_object": "Start",
-  "provisional_gps_target_objects": ["1", "2", "3", "4"],
+  "provisional_gps_target_objects": [
+    "1",
+    "2",
+    "3",
+    "4"
+  ],
   "provisional_finish_marker_object": "5",
-  "line_objects": ["Line.001", "Line.002"],
-  "ramp_objects": ["Ramp"],
+  "line_objects": [
+    "Line.001",
+    "Line.002"
+  ],
+  "ramp_objects": [
+    "Ramp"
+  ],
   "pothole_objects": [],
   "no_mans_land_objects": [],
   "internal_boundary_objects": [],
@@ -16,5 +26,697 @@
     "The fifth waypoint sits close to Start, so it is a candidate finish marker; the Blender object has no finish type or gate geometry.",
     "The four GPS roles are provisional. The asset labels only three waypoints with waypoint_order; objects 4 and 5 use the generic prop key.",
     "No potholes, No Man's Land region, internal boundary, finish gate, or ordered referee checkpoints are authored in the source asset."
+  ],
+  "diagnostic_dashed_lines": [
+    {
+      "name": "course_lane_divider_00",
+      "start": {
+        "x_m": 28,
+        "y_m": -9.7
+      },
+      "end": {
+        "x_m": 24,
+        "y_m": -10.27
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_01",
+      "start": {
+        "x_m": 24,
+        "y_m": -10.27
+      },
+      "end": {
+        "x_m": 20,
+        "y_m": -10.76
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_02",
+      "start": {
+        "x_m": 20,
+        "y_m": -10.76
+      },
+      "end": {
+        "x_m": 16,
+        "y_m": -11.58
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_03",
+      "start": {
+        "x_m": 16,
+        "y_m": -11.58
+      },
+      "end": {
+        "x_m": 12,
+        "y_m": -12.31
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_04",
+      "start": {
+        "x_m": 12,
+        "y_m": -12.31
+      },
+      "end": {
+        "x_m": 8,
+        "y_m": -13.17
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_05",
+      "start": {
+        "x_m": 8,
+        "y_m": -13.17
+      },
+      "end": {
+        "x_m": 6,
+        "y_m": -13.35
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_06",
+      "start": {
+        "x_m": 6,
+        "y_m": -13.35
+      },
+      "end": {
+        "x_m": 4,
+        "y_m": -12.95
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_07",
+      "start": {
+        "x_m": 4,
+        "y_m": -12.95
+      },
+      "end": {
+        "x_m": 2,
+        "y_m": -11
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_08",
+      "start": {
+        "x_m": 2,
+        "y_m": -11
+      },
+      "end": {
+        "x_m": 1.4,
+        "y_m": -8
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_09",
+      "start": {
+        "x_m": 1.4,
+        "y_m": -8
+      },
+      "end": {
+        "x_m": 0.94,
+        "y_m": -6
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_10",
+      "start": {
+        "x_m": 0.94,
+        "y_m": -6
+      },
+      "end": {
+        "x_m": 0.6,
+        "y_m": -4
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_11",
+      "start": {
+        "x_m": 0.6,
+        "y_m": -4
+      },
+      "end": {
+        "x_m": 0.35,
+        "y_m": -2
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_12",
+      "start": {
+        "x_m": 0.35,
+        "y_m": -2
+      },
+      "end": {
+        "x_m": 0.1,
+        "y_m": 0
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_13",
+      "start": {
+        "x_m": 0.1,
+        "y_m": 0
+      },
+      "end": {
+        "x_m": -0.35,
+        "y_m": 2
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_14",
+      "start": {
+        "x_m": -0.35,
+        "y_m": 2
+      },
+      "end": {
+        "x_m": -0.66,
+        "y_m": 4
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_15",
+      "start": {
+        "x_m": -0.66,
+        "y_m": 4
+      },
+      "end": {
+        "x_m": -0.96,
+        "y_m": 6
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_16",
+      "start": {
+        "x_m": -0.96,
+        "y_m": 6
+      },
+      "end": {
+        "x_m": -1.2,
+        "y_m": 8
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_17",
+      "start": {
+        "x_m": -1.2,
+        "y_m": 8
+      },
+      "end": {
+        "x_m": -1.43,
+        "y_m": 10
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_18",
+      "start": {
+        "x_m": -1.43,
+        "y_m": 10
+      },
+      "end": {
+        "x_m": -1.68,
+        "y_m": 12
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_19",
+      "start": {
+        "x_m": -1.68,
+        "y_m": 12
+      },
+      "end": {
+        "x_m": -1.82,
+        "y_m": 14
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_20",
+      "start": {
+        "x_m": -1.82,
+        "y_m": 14
+      },
+      "end": {
+        "x_m": -0.95,
+        "y_m": 16
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_21",
+      "start": {
+        "x_m": -0.95,
+        "y_m": 16
+      },
+      "end": {
+        "x_m": 1,
+        "y_m": 18
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_22",
+      "start": {
+        "x_m": 1,
+        "y_m": 18
+      },
+      "end": {
+        "x_m": 2,
+        "y_m": 18.5
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_23",
+      "start": {
+        "x_m": 2,
+        "y_m": 18.5
+      },
+      "end": {
+        "x_m": 4,
+        "y_m": 19.2
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_24",
+      "start": {
+        "x_m": 4,
+        "y_m": 19.2
+      },
+      "end": {
+        "x_m": 8,
+        "y_m": 19.75
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_25",
+      "start": {
+        "x_m": 8,
+        "y_m": 19.75
+      },
+      "end": {
+        "x_m": 12,
+        "y_m": 20.2
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_26",
+      "start": {
+        "x_m": 12,
+        "y_m": 20.2
+      },
+      "end": {
+        "x_m": 16,
+        "y_m": 20.75
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_27",
+      "start": {
+        "x_m": 16,
+        "y_m": 20.75
+      },
+      "end": {
+        "x_m": 18,
+        "y_m": 21.15
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_28",
+      "start": {
+        "x_m": 18,
+        "y_m": 21.15
+      },
+      "end": {
+        "x_m": 20,
+        "y_m": 21.35
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_29",
+      "start": {
+        "x_m": 20,
+        "y_m": 21.35
+      },
+      "end": {
+        "x_m": 22,
+        "y_m": 21.65
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_30",
+      "start": {
+        "x_m": 22,
+        "y_m": 21.65
+      },
+      "end": {
+        "x_m": 24,
+        "y_m": 21.85
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_31",
+      "start": {
+        "x_m": 24,
+        "y_m": 21.85
+      },
+      "end": {
+        "x_m": 26,
+        "y_m": 22.3
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_32",
+      "start": {
+        "x_m": 26,
+        "y_m": 22.3
+      },
+      "end": {
+        "x_m": 28,
+        "y_m": 22.2
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_33",
+      "start": {
+        "x_m": 28,
+        "y_m": 22.2
+      },
+      "end": {
+        "x_m": 29.5,
+        "y_m": 21.4
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_34",
+      "start": {
+        "x_m": 29.5,
+        "y_m": 21.4
+      },
+      "end": {
+        "x_m": 30.3,
+        "y_m": 20
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_35",
+      "start": {
+        "x_m": 30.3,
+        "y_m": 20
+      },
+      "end": {
+        "x_m": 30.5,
+        "y_m": 18
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_36",
+      "start": {
+        "x_m": 30.5,
+        "y_m": 18
+      },
+      "end": {
+        "x_m": 30.5,
+        "y_m": 15
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_37",
+      "start": {
+        "x_m": 30.5,
+        "y_m": 15
+      },
+      "end": {
+        "x_m": 30.5,
+        "y_m": 12
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_38",
+      "start": {
+        "x_m": 30.5,
+        "y_m": 12
+      },
+      "end": {
+        "x_m": 30.9,
+        "y_m": 9
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_39",
+      "start": {
+        "x_m": 30.9,
+        "y_m": 9
+      },
+      "end": {
+        "x_m": 31.5,
+        "y_m": 6
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_40",
+      "start": {
+        "x_m": 31.5,
+        "y_m": 6
+      },
+      "end": {
+        "x_m": 32.2,
+        "y_m": 2
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_41",
+      "start": {
+        "x_m": 32.2,
+        "y_m": 2
+      },
+      "end": {
+        "x_m": 32.3,
+        "y_m": 0
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_42",
+      "start": {
+        "x_m": 32.3,
+        "y_m": 0
+      },
+      "end": {
+        "x_m": 32.5,
+        "y_m": -4
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_43",
+      "start": {
+        "x_m": 32.5,
+        "y_m": -4
+      },
+      "end": {
+        "x_m": 32,
+        "y_m": -7
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_44",
+      "start": {
+        "x_m": 32,
+        "y_m": -7
+      },
+      "end": {
+        "x_m": 30,
+        "y_m": -9.7
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    },
+    {
+      "name": "course_lane_divider_45",
+      "start": {
+        "x_m": 30,
+        "y_m": -9.7
+      },
+      "end": {
+        "x_m": 28,
+        "y_m": -9.7
+      },
+      "width_m": 0.0762,
+      "dash_length_m": 0.75,
+      "gap_length_m": 0.45,
+      "allow_crossing": true
+    }
   ]
 }

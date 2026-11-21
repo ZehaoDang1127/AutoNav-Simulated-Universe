@@ -17,6 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FullTrackLauncherTests(unittest.TestCase):
+    def test_container_shell_launchers_use_unix_line_endings(self):
+        for name in ('run_full_track.sh', 'run_compact_smoke.sh', 'bootstrap_workspace.sh'):
+            with self.subTest(name=name):
+                self.assertNotIn(b'\r\n', (ROOT / 'integrations/ros_humble_fortress' / name).read_bytes())
+
     @unittest.skipUnless(os.name == 'posix', 'Full runner executes in the Linux container')
     def test_full_run_keeps_a_snapshot_when_source_script_changes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -61,6 +61,9 @@ class ReferenceNavigation:
     costmap_cells: tuple[tuple[int, int, str], ...]
     lidar_acquired_s: float | None
     perception_ms: float | None
+    # Optional observed lane IDs, on the costmap grid and in its pose frame.
+    # Missing IDs mean unclassified; these never override collision labels.
+    lane_cells: tuple[tuple[int, int, str], ...] = ()
 
 
 @dataclass(frozen=True)

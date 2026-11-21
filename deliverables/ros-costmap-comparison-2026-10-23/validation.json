@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-23",
+  "scope": "Full-course ROS/Gazebo only",
+  "python_tests": {
+    "passed": 63,
+    "skipped": 1
+  },
+  "portable_cpp_geometry": "passed",
+  "clean_and_repeat_patch_checks": {
+    "SIM": 19,
+    "ROBOT": 19,
+    "NAV2": 9
+  },
+  "ros_build": "pending: Docker Linux engine unavailable",
+  "ros_linked_lane_traversal": "pending",
+  "paired_gazebo_laps": "pending",
+  "current_hard_tape_segments": 872,
+  "current_crossable_paint_segments": 0,
+  "patch_sha256": {
+    "integrations/nav2_smac_planner/lane_transition_cost.patch": "9345d426edfed821a37404ae22de839f0b271bdb7acd2cca4f709221a641584b",
+    "integrations/robot/classified_lane_costmap.patch": "78671e071fcccdbbd70114f4b6fc19d885f4448cd5a9d802f036b24f8d5be136"
+  }
+}

@@ -10,6 +10,7 @@ import math
 from .api import EpisodeContext, NavigationCommand, Observation, SensorSample, PluginManifest
 from .scenarios import latlon_to_meters
 from .perception import ReferenceCostmap
+from .lane_costmap import LaneAwareCostmap, LaneCostConfig
 
 
 def _angle(value: float) -> float:
@@ -75,7 +76,19 @@ class ReferenceNavigator:
                  "reference-navigation" in context.capabilities)):
             raise ValueError("ReferenceNavigator requires LiDAR or reference navigation")
         self.context = context
-        self.map = ReferenceCostmap(context.max_grade_percent)
+        parameters = dict(context.parameters)
+        version = parameters.get("costmap_version", "1")
+        if version not in ("1", "2"):
+            raise ValueError("costmap_version must be 1 or 2")
+        if version == "2":
+            defaults = LaneCostConfig()
+            config = LaneCostConfig(**{
+                name: float(parameters.get(name, getattr(defaults, name)))
+                for name in ("lane_change_cost_m", "clearance_weight",
+                             "clearance_distance_m", "unknown_multiplier")})
+            self.map = LaneAwareCostmap(context.max_grade_percent, config=config)
+        else:
+            self.map = ReferenceCostmap(context.max_grade_percent)
         self.last_cloud_time = -1.0
         self.last_plan_time = -1.0
         self.path = []
@@ -95,6 +108,8 @@ class ReferenceNavigator:
                              reference.pose.yaw_rad)
             self.map.resolution_m = reference.costmap_resolution_m
             self.map.cells = {(ix, iy): label for ix, iy, label in reference.costmap_cells}
+            if isinstance(self.map, LaneAwareCostmap):
+                self.map.lane_ids = {(ix, iy): lane for ix, iy, lane in reference.lane_cells}
             goal = reference.goal
         else:
             odom = _latest(observation, "odometry")
@@ -115,6 +130,8 @@ class ReferenceNavigator:
             # replaces this conservative buffer.
             self.path = self.map.plan((x, y), target, self.context.robot_length_m)
             self.last_plan_time = now
+        if isinstance(self.map, LaneAwareCostmap):
+            return self._lane_command((x, y, heading), target, now, perception_ms)
         if self.last_progress is None:
             self.last_progress = (x, y)
             self.last_progress_time = now
@@ -154,6 +171,30 @@ class ReferenceNavigator:
         if goal.frame != "odom" or goal.x_m is None or goal.y_m is None:
             raise ValueError("ReferenceNavigator requires an odom-frame goal")
         return goal.x_m, goal.y_m
+
+    def _lane_command(self, pose, target, now, perception_ms):
+        """Track adjacent v2 path points; stop on a blocked or missing route."""
+        x, y, heading = pose
+        tolerance = min(0.08, self.map.resolution_m / 4)
+        while self.path and math.dist((x, y), self.path[0]) < tolerance:
+            self.path.pop(0)
+        speed = turn = 0.0
+        if self.path and math.dist((x, y), target) >= tolerance:
+            point = self.path[0]
+            if self.map.segment_is_clear((x, y), point, self.context.robot_length_m):
+                error = _angle(math.atan2(point[1] - y, point[0] - x) - heading)
+                turn = max(-1.0, min(1.0, 2.2 * error))
+                if abs(error) < 0.2:
+                    speed = min(0.3, math.dist((x, y), point))
+            else:
+                self.last_plan_time = -1.0
+        self.recovery = "NORMAL_FOLLOWING" if self.path else "WAIT_FOR_PATH"
+        command = self._command(speed, turn, now, perception_ms)
+        plan = self.map.last_plan
+        return NavigationCommand(command.linear_mps, command.angular_radps, command.expires_s,
+                                 command.diagnostics + (("plan_status", plan.status),
+                                     ("lane_changes", str(plan.lane_changes)),
+                                     ("lane_change_cost_m", str(plan.lane_change_cost_m))))
 
     def _bootstrap_speed(self):
         return 0.0

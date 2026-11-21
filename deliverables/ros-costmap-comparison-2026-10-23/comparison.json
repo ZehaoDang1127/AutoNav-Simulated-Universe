@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "scope": "ROS/Gazebo full-course configuration and line kernel, not an executed mission",
+  "course_id": "local_mock_course",
+  "versions": {
+    "1": {
+      "schema_version": 1,
+      "version": "1",
+      "lane_change_cost_m": 0.25,
+      "course_id": "local_mock_course",
+      "semantic_frame": "map",
+      "crossable_line_names": [],
+      "divider_segments": 0,
+      "crossable_paint_segments": 0,
+      "hard_segments": 872,
+      "classification_tolerance_m": 0.12,
+      "semantic_status": "all_tape_hard",
+      "note": "Only explicitly classified course segments can be crossable; all other tape stays hard."
+    },
+    "2": {
+      "schema_version": 1,
+      "version": "2",
+      "lane_change_cost_m": 0.25,
+      "course_id": "local_mock_course",
+      "semantic_frame": "map",
+      "crossable_line_names": [],
+      "divider_segments": 0,
+      "crossable_paint_segments": 0,
+      "hard_segments": 872,
+      "classification_tolerance_m": 0.12,
+      "semantic_status": "all_tape_hard",
+      "note": "Only explicitly classified course segments can be crossable; all other tape stays hard."
+    }
+  },
+  "line_kernel_samples": [
+    {
+      "distance_m": 0,
+      "v1_line_cost": 254,
+      "v2_line_cost": 254
+    },
+    {
+      "distance_m": 0.05,
+      "v1_line_cost": 253,
+      "v2_line_cost": 253
+    },
+    {
+      "distance_m": 0.1,
+      "v1_line_cost": 239,
+      "v2_line_cost": 221
+    },
+    {
+      "distance_m": 0.25,
+      "v1_line_cost": 206,
+      "v2_line_cost": 141
+    },
+    {
+      "distance_m": 0.5,
+      "v1_line_cost": 160,
+      "v2_line_cost": 48
+    },
+    {
+      "distance_m": 0.6,
+      "v1_line_cost": 145,
+      "v2_line_cost": 24
+    },
+    {
+      "distance_m": 0.7,
+      "v1_line_cost": 0,
+      "v2_line_cost": 8
+    },
+    {
+      "distance_m": 0.85,
+      "v1_line_cost": 0,
+      "v2_line_cost": 0
+    }
+  ],
+  "runtime_validation": "Pending: Docker Desktop Linux engine unavailable during implementation"
+}

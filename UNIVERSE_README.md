@@ -13,10 +13,10 @@ if (-not (Test-Path .\.venv\Scripts\python.exe)) {
 .\.venv\Scripts\python.exe -m pip install -e ".[gui]"
 .\.venv\Scripts\autonav-universe.exe validate-plugin --algorithm examples.my_navigation.policy:MyNavigator
 .\.venv\Scripts\autonav-universe.exe run --scenario straight --algorithm examples.my_navigation.policy:MyNavigator --seed 1 --output runs/example
-.\.venv\Scripts\autonav-universe.exe app
+.\.venv\Scripts\autonav-universe.exe app --backend python
 ```
 
-On macOS/Linux, create the environment with `python3 -m venv .venv` only if it does not already exist, and use `.venv/bin/python` and `.venv/bin/autonav-universe`. Omit `[gui]` for the headless CLI. `run --gui` opens recorded truth replay after the episode; `app` has Run, Pause, Reset, algorithm, scenario, and seed controls with live sensor availability and truth-viewer motion.
+On macOS/Linux, create the environment with `python3 -m venv .venv` only if it does not already exist, and use `.venv/bin/python` and `.venv/bin/autonav-universe`. Omit `[gui]` for the headless CLI. `run --gui` opens recorded truth replay after the episode; `app --backend python` has Run, Pause, Reset, algorithm, scenario, and seed controls with live sensor availability and truth-viewer motion. The default `app` opens the [full-course ROS/Gazebo workspace](integrations/ros_humble_fortress/README.md#full-course-qt-workspace), which also includes this Python scenario lab as a tab.
 
 Always install dependencies with the same environment's Python used to launch the app. A bare `pip` may target a different installation. If the Python version inside an existing `.venv` changed, run `.\.venv\Scripts\python.exe -m pip install --force-reinstall -e ".[gui]"` from the repository root to replace incompatible compiled GUI dependencies.
 
@@ -53,8 +53,8 @@ The simulation advances to exact sensor, controller (50 Hz), and navigation dead
 
 The shared chassis and PID use provisional BT/SPEED parameters. The authored scenarios combine odometry, GPS faults, sparse sensor-frame LiDAR, ramps, obstacles, and ordered goals in one run. `ReferenceNavigator` builds an observed costmap with sensor-frame PCA grade checks, plans with A*, and has a small backup/spin recovery. `GPSLidarNavigator` adds GPS waypoint projection to that pipeline. The 60 ms perception metric is measured by the runner on the planner/controller track; a complete-navigation plug-in must instrument and report its own perception stage.
 
-The current terrain is a simplified height field. It has no suspension, traction loss, tipping, contact impulse, or hardware-calibrated wheel forces. The legacy STL raycaster, GPS EKF, exact behavior tree, full ROS HUD, and Blender mock-course geometry have not yet been extracted into this engine. `combined.json` is an authored integration scenario, not a validated export of `Course.blend`. The Qt window is a new shared-run viewer; the existing GUI simulator's ROS-compatible HUD remains a separate legacy program.
+The current terrain is a simplified height field. It has no suspension, traction loss, tipping, contact impulse, or hardware-calibrated wheel forces. The legacy STL raycaster, GPS EKF, exact behavior tree, full ROS HUD, and Blender mock-course geometry have not yet been extracted into this engine. `combined.json` is an authored integration scenario, not a validated export of `Course.blend`. The Python scenario lab is a shared-run viewer; the full-course tab controls ROS/Gazebo separately. The existing GUI simulator's ROS-compatible HUD remains a separate legacy program.
 
 For the Blender asset audit, run `blender -b Mock_Course_Asset/Course.blend --python tools/export_course.py -- runs/course-export`, then `python tools/audit_course_export.py runs/course-export/course_metadata.json`. The exporter preserves raw custom properties and writes a GLB; the audit checks transforms and meter units and lists property names. Converting that export into a runtime scenario requires checking the actual property schema first.
 
-The Python evaluation release described by the plan still needs the full terrain/waypoint regression suites, validated mock-course export, legacy component parity checks, and a polished comparison view. The ROS/Gazebo connection is a later milestone and requires the actual robot workspace.
+The Python evaluation release described by the plan still needs the full terrain/waypoint regression suites, legacy component parity checks, and a polished comparison view. The separate ROS/Gazebo course backend uses the pinned robot workspace and audited course bundle; it does not change the Python engine's fidelity.

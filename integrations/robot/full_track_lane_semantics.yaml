@@ -1,0 +1,147 @@
+# Divider follows the marked course and the open obstacle section. Existing tape stays hard.
+schema_version: 1
+frame_id: map
+course_id: local_mock_course
+crossable_line_names:
+- course_lane_divider_00
+- course_lane_divider_01
+- course_lane_divider_02
+- course_lane_divider_03
+- course_lane_divider_04
+- course_lane_divider_05
+- course_lane_divider_06
+- course_lane_divider_07
+- course_lane_divider_08
+- course_lane_divider_09
+- course_lane_divider_10
+- course_lane_divider_11
+- course_lane_divider_12
+- course_lane_divider_13
+- course_lane_divider_14
+- course_lane_divider_15
+- course_lane_divider_16
+- course_lane_divider_17
+- course_lane_divider_18
+- course_lane_divider_19
+- course_lane_divider_20
+- course_lane_divider_21
+- course_lane_divider_22
+- course_lane_divider_23
+- course_lane_divider_24
+- course_lane_divider_25
+- course_lane_divider_26
+- course_lane_divider_27
+- course_lane_divider_28
+- course_lane_divider_29
+- course_lane_divider_30
+- course_lane_divider_31
+- course_lane_divider_32
+- course_lane_divider_33
+- course_lane_divider_34
+- course_lane_divider_35
+- course_lane_divider_36
+- course_lane_divider_37
+- course_lane_divider_38
+- course_lane_divider_39
+- course_lane_divider_40
+- course_lane_divider_41
+- course_lane_divider_42
+- course_lane_divider_43
+- course_lane_divider_44
+- course_lane_divider_45
+divider_centerlines_m:
+- - - 28
+    - -9.7
+  - - 24
+    - -10.27
+  - - 20
+    - -10.76
+  - - 16
+    - -11.58
+  - - 12
+    - -12.31
+  - - 8
+    - -13.17
+  - - 6
+    - -13.35
+  - - 4
+    - -12.95
+  - - 2
+    - -11
+  - - 1.4
+    - -8
+  - - 0.94
+    - -6
+  - - 0.6
+    - -4
+  - - 0.35
+    - -2
+  - - 0.1
+    - 0
+  - - -0.35
+    - 2
+  - - -0.66
+    - 4
+  - - -0.96
+    - 6
+  - - -1.2
+    - 8
+  - - -1.43
+    - 10
+  - - -1.68
+    - 12
+  - - -1.82
+    - 14
+  - - -0.95
+    - 16
+  - - 1
+    - 18
+  - - 2
+    - 18.5
+  - - 4
+    - 19.2
+  - - 8
+    - 19.75
+  - - 12
+    - 20.2
+  - - 16
+    - 20.75
+  - - 18
+    - 21.15
+  - - 20
+    - 21.35
+  - - 22
+    - 21.65
+  - - 24
+    - 21.85
+  - - 26
+    - 22.3
+  - - 28
+    - 22.2
+  - - 29.5
+    - 21.4
+  - - 30.3
+    - 20
+  - - 30.5
+    - 18
+  - - 30.5
+    - 15
+  - - 30.5
+    - 12
+  - - 30.9
+    - 9
+  - - 31.5
+    - 6
+  - - 32.2
+    - 2
+  - - 32.3
+    - 0
+  - - 32.5
+    - -4
+  - - 32
+    - -7
+  - - 30
+    - -9.7
+  - - 28
+    - -9.7
+classification_tolerance_m: 0.12

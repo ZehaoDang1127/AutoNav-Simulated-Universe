@@ -10,7 +10,14 @@ from pathlib import Path
 def read_json_line(path: Path) -> dict | None:
     if not path.exists():
         return None
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        value = json.loads(text)
+        if isinstance(value, dict):
+            return value
+    except json.JSONDecodeError:
+        pass
+    for line in text.splitlines():
         if line.startswith("{"):
             try:
                 value = json.loads(line)
@@ -28,11 +35,16 @@ def main() -> int:
     parser.add_argument("--mission-log", type=Path, required=True)
     parser.add_argument("--mission-exit", type=int, required=True)
     parser.add_argument("--readiness", type=Path)
+    parser.add_argument("--desktop-status", type=Path)
     args = parser.parse_args()
 
     score = read_json_line(args.score)
     gate = read_json_line(args.gate)
     readiness = None
+    desktop = read_json_line(args.desktop_status) if args.desktop_status else None
+    desktop_reason = desktop.get("reason") if desktop else None
+    if desktop_reason == "mission_failed":
+        desktop_reason = None  # Prefer the referee or action client's precise failure.
     if args.readiness and args.readiness.exists():
         try:
             readiness = json.loads(args.readiness.read_text(encoding="utf-8"))
@@ -50,8 +62,11 @@ def main() -> int:
         and score.get("finish_reached")
         and gate_passed
         and (readiness is None or readiness.get("ready"))
+        and not desktop_reason
     )
-    if readiness and not readiness.get("ready"):
+    if desktop_reason:
+        reason = desktop_reason
+    elif readiness and not readiness.get("ready"):
         reason = "startup_readiness_failed"
     elif score and score.get("failures"):
         reason = str(score["failures"][0])

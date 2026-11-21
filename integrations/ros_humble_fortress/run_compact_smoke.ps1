@@ -5,7 +5,9 @@ param(
     [string]$RunName = 'compact-ros-smoke',
     [int]$ViewerPort = 8765,
     [switch]$NoViewer,
-    [switch]$FullTrack
+    [switch]$FullTrack,
+    [ValidateSet('1', '2')][string]$CostmapVersion = '2',
+    [double]$LaneChangeCost = 0.25
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +27,9 @@ if ($RunName -notmatch '^[a-zA-Z0-9_-]+$') {
 if ($MissionTimeoutSec -lt 1 -or $ViewerPort -lt 1 -or $ViewerPort -gt 65535) {
     throw 'MissionTimeoutSec and ViewerPort must be positive; ViewerPort must be at most 65535.'
 }
+if ([double]::IsNaN($LaneChangeCost) -or [double]::IsInfinity($LaneChangeCost) -or $LaneChangeCost -lt 0) {
+    throw 'LaneChangeCost must be finite and nonnegative.'
+}
 $dockerArgs = @(
     'run', '--gpus', 'all',
     '-v', "${Volume}:/ws",
@@ -32,6 +37,11 @@ $dockerArgs = @(
     '-e', "MISSION_TIMEOUT_SEC=$MissionTimeoutSec",
     '-e', "RUN_DIR=/host/runs/$RunName"
 )
+
+if ($FullTrack) {
+    $dockerArgs += @('-e', "COSTMAP_VERSION=$CostmapVersion", '-e',
+        ('LANE_CHANGE_COST_M=' + $LaneChangeCost.ToString([Globalization.CultureInfo]::InvariantCulture)))
+}
 
 if ($NoViewer) {
     $headlessArgs = $dockerArgs + @('--rm', $Image, 'bash',

@@ -50,6 +50,20 @@ class CommandGateTests(unittest.TestCase):
         self.assertTrue(gate.failed)
         self.assertEqual(gate.output(1.1), (0.0, 0.0))
 
+    def test_desktop_interlock_clears_commands_across_pause_resume(self):
+        gate = GateState()
+        gate.set_enable(True, 1)
+        gate.set_command(0.5, 0.2, 1)
+        gate.set_interlock(False, 1.1)
+        gate.set_enable(True, 1.15)  # Mission heartbeat cannot override Pause.
+        gate.set_command(0.5, 0.2, 1.15)
+        self.assertEqual(gate.output(1.2), (0, 0))
+        gate.set_interlock(True, 1.25)
+        gate.set_enable(True, 1.25)
+        self.assertEqual(gate.output(1.25), (0, 0))
+        gate.set_command(0.3, 0, 1.3)
+        self.assertEqual(gate.output(1.3), (0.3, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

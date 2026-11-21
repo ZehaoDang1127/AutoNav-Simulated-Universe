@@ -1,10 +1,74 @@
-# Full-track implementation status (2026-10-07)
+# Full-track implementation status (2026-10-14)
 
 This records observed work against `FULL_TRACK_AUTONAV_PLAN.md`. Attempt 76
 passed the autonomous full local-course diagnostic: **5/5 waypoints, finish,
 zero violations, strict speed and stop gates**, after 165.042 m / 378.0 simulated
 seconds. The one-click release, complete assets and repeatability suite remain
 open. Earlier entries below preserve the evidence from intermediate attempts.
+
+## Full-course Qt workspace (2026-10-14)
+
+- `autonav-universe app` now opens the exported-course workspace by default.
+  The original Python scenario viewer remains a tab and is available directly
+  with `app --backend python`. `Run_Full_Course.cmd` opens the new workspace.
+- The window previews the verified course/world bundle before Run, follows
+  real ROS telemetry, displays sensor health, the planned route and estimated
+  local costmap, and lists saved results and replays. Camera data remains
+  unavailable unless an actual image arrives. The asset audit stays visible.
+- Each Run owns a fresh named container and output directory. The existing
+  readiness checks precede mission dispatch. Pause inhibits the velocity gate
+  and freezes Gazebo physics; Resume excludes the pause from wall budgets.
+  Stop cancels the goal and retains output; Reset starts the next attempt with
+  a fresh simulator, localization, maps, commands and referee. Window closing
+  waits for the stopped session to clean up.
+- Desktop sessions remap only the harness's legacy AUTO publisher. The
+  steady-clock command gate owns `/autonomous_mode` and independently checks
+  a desktop heartbeat. Lost ownership latches Stop. A mission watchdog also
+  checks LiDAR, IMU, GPS, local localization and advancing simulation time.
+- The first live attempt, `full-track-app-20261014T192041Z-37ba25`, correctly
+  refused mission dispatch because a busy ray caster starved map publication.
+  The stop gate passed. The map timer now has a separate callback group;
+  native ROS tests prove that it publishes during a deliberately blocked
+  sensor callback while stale-map readiness rejection remains intact.
+- Attempt `full-track-app-20261014T192620Z-f54139` passed readiness but stopped
+  on a lost desktop heartbeat; its stop gate passed. Bounded atomic-write
+  retries now handle transient Windows/Docker bind-mount sharing locks. A
+  regression covers that failure mode.
+- Attempt `full-track-app-20261014T192805Z-a6b4bb` passed readiness and a live
+  Pause/Resume check: six telemetry samples held simulation time at 6.01 s
+  throughout the pause. It then resumed autonomous travel with real sensor
+  and estimated-costmap telemetry. It reached 4/5 goals after 153.349 m /
+  391.02 simulated seconds, with zero violations, before its 900-second wall
+  budget expired on the return leg (`waypoint_timeout:5`). Its stop gate passed.
+  The desktop now defaults to 1,800 active wall seconds for this host; the
+  navigation profile and speed limits are unchanged.
+- The 1,800-second retest, `full-track-app-20261014T194539Z-110235`, reached
+  4/5 goals and traveled 120.182 m before stalling at base pose
+  (31.423, -10.112), yaw 2.056 rad, on the final return leg. The referee
+  stopped it at 322.61 simulated seconds for
+  `blocking_traffic_no_progress_over_60s`; its stop gate passed. Increasing
+  the time budget therefore does not establish reliable full-course
+  navigation. This is an open navigation failure, not a completed lap.
+- Final Windows validation ran 45 Python cases: 44 passed, and the Linux-only
+  launcher snapshot case was skipped. That case passed separately in the
+  pinned Linux container. The three affected ROS CTest groups
+  (`desktop_control`, `mapping_canvas`, `readiness_map`) passed all six cases.
+  Qt rendering and the real exported-course preview were inspected.
+- The bounded live lifecycle check passed in
+  `full-track-app-20261014T200054Z-f055cd`: readiness, Run, Pause (six identical
+  6.01 s samples), Resume, and operator Stop. A fresh reset into
+  `full-track-app-20261014T200205Z-b84fe9` passed readiness and operator Stop
+  with 0/5 previous goals. Both retained `reason=operator_stop` and passed the
+  stopping gate. This verifies the desktop lifecycle, not a complete lap or
+  the three-repeat release suite.
+- The ROS map/publication and late-reader readiness checks pass, and canonical
+  patch verification passes for 19 simulator, 18 robot and eight Nav2 patches.
+  The reproducible host lifecycle test is `tools/check_desktop_session.py`;
+  `--complete-course --timeout 1800` also requires a full diagnostic lap.
+
+The desktop implementation does not complete the missing authored course
+features, sensor-fidelity work, Gazebo 3D-client presentation, or the release
+repeatability suite.
 
 ## Full-track failure correction (2026-10-05)
 
@@ -914,8 +978,8 @@ pass; the release repeatability suite remains open.
 | Validated local asset | The 83-object Blender scene has a 38 x 38 m ground, two line meshes, one ramp, 73 cones, start, and five markers. It does not author potholes, a No Man's Land region, an internal boundary, a finish gate, or ordered referee checkpoints. The fifth marker is only a finish candidate. Four GPS roles are provisional. `--require-complete-assets` fails. |
 | Full world fidelity | The generated SDF represents semantic YAML, not every Blender collision mesh. Ramp contact and camera-visible marking geometry have not been verified in Gazebo. The upstream `official_full_loop.yaml` also fails the patched validator because its generated world is stale and its `line_less_gps_sections` requirement is missing. |
 | Sensor-driven stack | The diagnostic now uses local wheel/gyro and global GPS EKFs with an initially east-facing robot, plus `/map_padded`. Real-sensor calibration, transient mapping, CPU camera lines, visual potholes, and lane-to-GPS state transitions are not integrated. The image lacks CUDAToolkit, so the upstream CUDA camera detector was skipped. |
-| Navigation | Attempt 76 passed the autonomous local course: 5/5, finish, zero violations, strict speed and stop gates, 165.042 m / 378.0 s. The profile retains 0.10 m hard padding, preference 500, queued-command prediction, forward travel and schema-5 swept-contact scoring. Learned return history uses global GPS EKF coordinates projected through current TF; GPS arrival uses the antenna and matching datum. The controller/smoother use ROS time and the stop gate uses steady time. |
-| Run application | Compact and full local-scene diagnostics have launchers, a live browser view, saved replay, and result bundle; the full run also retains a rosbag. Gazebo runs in server-only mode. There is no visible default full-course Run button, Pause/Resume/Stop/Reset UI, or validated three-repeat reset lifecycle. The gate is wired for diagnostic runs, but the simulator's `/autonomous_mode` harness still publishes true continuously. |
+| Navigation | Attempt 76 passed the autonomous local course: 5/5, finish, zero violations, strict speed and stop gates, 165.042 m / 378.0 s. October 14 desktop retests reached 4/5 but did not finish: one exceeded a 900-second wall budget, and the 1,800-second retest stalled on the return leg and failed the blocking-traffic rule. Reliable completion remains open. The profile retains 0.10 m hard padding, preference 500, queued-command prediction, forward travel and schema-5 swept-contact scoring. Learned return history uses global GPS EKF coordinates projected through current TF; GPS arrival uses the antenna and matching datum. The controller/smoother use ROS time and the stop gate uses steady time. |
+| Run application | The default Qt workspace now controls real ROS/Gazebo sessions and provides course preview, Run/Pause/Resume/Stop/Reset, telemetry, estimated map, logs, saved results and replay. Desktop AUTO is supervised and its heartbeat is independently gated. Live readiness, Run/Pause/Resume/Stop and a fresh-container reset are verified. Full-lap desktop acceptance and the three-repeat release suite remain open. Gazebo still runs in server-only mode. |
 | Release suite | One full local-course diagnostic passed. Three clean repeats, ten-seed testing, a rules-complete referee and performance acceptance remain unverified. |
 
 The diagnostic lap establishes autonomous completion of the current local
@@ -928,6 +992,22 @@ source, regenerate the world and course as a single versioned pair, and verify
 sensor observations. Replace the simulator pose/map shortcuts with the robot
 estimator and observed map, add camera-derived pothole exclusion and lane
 progress logic. The current local-course stall is resolved; compact-course
-differences remain separate validation work. Implement the desktop Run
-application and repeatability suite before treating the system as a release
-candidate.
+differences remain separate validation work. Complete desktop acceptance and
+the repeatability suite before treating the system as a release candidate.
+
+## October 23: ROS lane-costmap integration (runtime validation pending)
+
+The full-course launcher and Qt workspace now select v1 or v2. V2 adds a
+quadratic tape-clearance kernel and explicit divider annotations with native
+Smac primitive transition scoring. All 872 existing tape segments remain hard,
+as requested; no divider is inferred from the asset. The Python lab is unchanged.
+Profile generation snapshots version/roles/settings and rejects stale ROS builds.
+
+The final Python suite ran 64 tests: 63 passed and one Linux-only launcher test
+was skipped. Portable C++ lane geometry passed. Clean and repeat-bootstrap
+checks passed for 19 simulator, 19 robot and nine Nav2 canonical patches.
+ROS compilation, ROS-linked lane traversal tests, and paired full-course laps
+remain pending because Docker Desktop's Linux engine could not start. These
+checks do not establish v2 mission performance. See the
+[ROS cost-map guide](docs/ros-lane-costmap.md) and
+[comparison report](deliverables/ros-costmap-comparison-2026-10-23/comparison.md).
